@@ -80,6 +80,7 @@ def _extract_cp_min(result: dict, alpha: float, re: float) -> float:
     """Return min(Cp) over the surface from NeuralFoil's ue/vinf stations."""
     ue_vals: list[float] = []
 
+    # Collect every valid ue/vinf station from both surfaces
     for surface in ("upper", "lower"):
         for i in range(32):
             key = f"{surface}_bl_ue/vinf_{i}"

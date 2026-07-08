@@ -1,0 +1,36 @@
+shapes:
+  - "sg6043"      # low Re performance: Re 1e5-1e6, best cavitation margin
+  - "naca642415"  # full-scale tidal: Re 5e5-6e6, passive-pitch reference
+
+repanel:
+  enabled: true        # false uses the raw UIUC coordinates, unrepanelled
+  n_points_per_side: 100
+
+grassmann:
+  n_perturb: 20         # number of perturbed shapes to sample
+  seed: 0               # rng seed for reproducible sampling
+
+solvers:
+  neuralfoil:
+    enabled: true
+    model_size: "xxxlarge"
+  xfoil:
+    enabled: true
+    max_iter: 300
+
+operating:
+  alpha:
+    start: -10
+    stop: 20
+    step: 5
+  reynolds: [1e+6, 5e+6]
+  n_crit: [3, 9]               # shared by NeuralFoil and XFoil
+
+cavitation:
+  chord: 0.5        # m — mid-span chord, full-scale tidal
+  depth: 30.0        # m
+  temperature: 10.0  # degC
+
+output:
+  path: "output/data_small/foilpolars.nc"
+  save_cp: true

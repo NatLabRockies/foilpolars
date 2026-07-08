@@ -7,3 +7,4 @@ xfoil_src/
 bin/xfoil
 *.csv
 output/
+logs/

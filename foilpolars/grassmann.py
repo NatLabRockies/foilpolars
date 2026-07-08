@@ -1,0 +1,545 @@
+"""Grassmannian shape parameterization of raw airfoil coordinates (G2Aero)."""
+
+from __future__ import annotations
+
+import matplotlib.pyplot as plt
+import numpy as np
+import xarray as xr
+from g2aero.Grassmann import (
+    PGA,
+    Karcher,
+    landmark_affine_transform,
+    perturb_gr_shape,
+)
+from g2aero.utils import check_selfintersect
+
+from foilpolars.utils import save_or_show
+
+# Shared palette so baseline/perturbed/mean read the same way across
+# every plotting function in this module
+BASELINE_COLOR = "k"
+PERTURBED_COLOR = "grey"
+MEAN_COLOR = "tab:orange"
+
+
+def compute_grassmann(
+    shapes: dict[str, np.ndarray],
+) -> dict[str, dict[str, np.ndarray]]:
+    """Map each foil's raw (x/c, y/c) coordinates onto the Grassmannian."""
+    results: dict[str, dict[str, np.ndarray]] = {}
+
+    # Landmark-affine standardize each foil independently, since raw
+    # foils may have different point counts
+    for desig, coords in shapes.items():
+        x_gr, m, b = landmark_affine_transform(coords)
+        results[desig] = {"X_gr": x_gr, "M": m, "b": b}
+
+    return results
+
+
+def save_grassmann_baseline(
+    results: dict[str, dict[str, np.ndarray]],
+    out_dir: str = "output/data/foil_baseline_grass",
+) -> None:
+    """Write each foil's Grassmann coords to csv, affine transform to index."""
+    from foilpolars.shapes import save_shapes
+
+    # Grassmann coords are (n_points, 2), same shape as physical
+    # coordinates, so they reuse the same csv/index writer. The affine
+    # transform M (2x2) and b (2,) needed to recover the physical shape
+    # from X_gr don't fit that per-point csv, so they ride along as
+    # extra index columns instead of a second per-foil file
+    x_gr = {desig: r["X_gr"] for desig, r in results.items()}
+    extra_columns = {
+        desig: dict(zip(
+            ["M_00", "M_01", "M_10", "M_11", "b_0", "b_1"],
+            [*r["M"].ravel(), *r["b"]],
+        ))
+        for desig, r in results.items()
+    }
+    save_shapes(
+        x_gr, out_dir=out_dir, header="Xgr_0,Xgr_1",
+        extra_columns=extra_columns,
+    )
+
+
+def shapes_dict(
+    coords: np.ndarray, prefix: str = "p", width: int = 4,
+) -> dict[str, np.ndarray]:
+    """Assign each sample in a stacked coordinate array a sequential id."""
+    return {
+        f"{prefix}{j:0{width}d}": sample for j, sample in enumerate(coords)
+    }
+
+
+def check_reconstruction(
+    shapes: dict[str, np.ndarray],
+    results: dict[str, dict[str, np.ndarray]],
+) -> None:
+    """Print the max reconstruction error per foil as a sanity check."""
+    # Reproject each foil's Grassmann coords through its affine transform
+    # and compare against the original physical coordinates
+    for desig, coords in shapes.items():
+        r = results[desig]
+        recon = r["X_gr"] @ r["M"] + r["b"]
+        err = np.max(np.abs(recon - coords))
+        print(f"{desig}: max reconstruction error = {err:.2e}")
+
+
+def compute_pga_basis(
+    shapes: dict[str, np.ndarray], n_coord: int = 4,
+) -> dict[str, object]:
+    """Batch-align all foils, then compute their Karcher mean + PGA basis."""
+    # Stack every foil's coordinates so they can be batch-aligned together
+    foil_ids = list(shapes.keys())
+    stacked = np.stack([shapes[desig] for desig in foil_ids])
+
+    # Batched mapping Procrustes-aligns all shapes before the Karcher
+    # mean and PGA are computed, so geodesic distances stay meaningful
+    x_gr, m, b = landmark_affine_transform(stacked)
+    mu = Karcher(x_gr)
+    vh, _, t = PGA(mu, x_gr, n_coord=n_coord)
+
+    return {
+        "foil_ids": foil_ids, "X_gr": x_gr, "M": m, "b": b,
+        "mu": mu, "Vh": vh, "t": t,
+    }
+
+
+def compute_pga_embedding(
+    shapes: dict[str, np.ndarray],
+) -> tuple[list[str], np.ndarray]:
+    """Project each foil's Grassmann point to 2D via Karcher mean + PGA."""
+    basis = compute_pga_basis(shapes, n_coord=2)
+    return basis["foil_ids"], basis["t"]
+
+
+def _draw_pga_embedding(
+    ax: plt.Axes,
+    t: np.ndarray,
+    title: str | None = None,
+    sampling_region: tuple[np.ndarray, np.ndarray] | None = None,
+    sampled_t: np.ndarray | None = None,
+) -> None:
+    """Scatter each foil as a point, with the sampling region behind it."""
+    # Shade the uniform sampling box (axis_min/axis_max per PGA mode)
+    # first, so foil points and labels stay on top and the overlap
+    # between each foil's position and the shared sampling region is
+    # visible
+    if sampling_region is not None:
+        axis_min, axis_max = sampling_region
+        ax.add_patch(plt.Rectangle(
+            axis_min, *(axis_max - axis_min),
+            facecolor=PERTURBED_COLOR, alpha=0.15, edgecolor=PERTURBED_COLOR,
+            linewidth=1, label="sampling region", zorder=0,
+        ))
+
+    # Sampled perturbation coordinates as small markers, drawn before
+    # the foil points so the labelled foils stay on top
+    if sampled_t is not None:
+        ax.scatter(
+            sampled_t[:, 0], sampled_t[:, 1], s=12, color=PERTURBED_COLOR,
+            alpha=0.6, zorder=1, label="sampled points",
+        )
+
+    # Plot every foil as one big star, since PGA reduces each Grassmann
+    # point (a full shape) to a single 2D coordinate and individual
+    # foil identity isn't of interest here
+    ax.scatter(
+        t[:, 0], t[:, 1], marker="*", s=200, color=BASELINE_COLOR,
+        edgecolor="k", linewidth=0.5, zorder=2, label="baseline foils",
+    )
+
+    # Square axes with labels, optional title, grid and legend
+    ax.set_box_aspect(1)
+    ax.set_xlabel("PGA coordinate 1")
+    ax.set_ylabel("PGA coordinate 2")
+    if title is not None:
+        ax.set_title(title)
+    ax.grid(True, linewidth=0.3)
+    ax.legend(fontsize=8)
+
+
+def plot_pga_embedding(
+    t: np.ndarray,
+    save_path: str | None = None,
+    title: str = "Grassmann PGA embedding (one point per foil)",
+) -> None:
+    """Scatter each foil as a single point in its 2D PGA coordinates."""
+    fig, ax = plt.subplots(figsize=(4, 4))
+    _draw_pga_embedding(ax, t, title)
+    plt.tight_layout()
+    save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
+
+
+def plot_pga_pairs(
+    basis: dict[str, object],
+    perturbed: dict[str, np.ndarray],
+    save_path: str | None = None,
+) -> None:
+    """Corner plot of the 4 PGA coordinates plus the thickness ratio."""
+    t = basis["t"]
+    n_coord = t.shape[1]
+
+    # Thickness ratio is the 5th parameter, computed the same way as
+    # in perturb_grassmann: each foil's affine transform M has two
+    # singular values (chord-wise, thickness-wise); their ratio is the
+    # baseline's counterpart to the sampled thickness_ratio
+    singular_values = np.linalg.svd(basis["M"], compute_uv=False)
+    baseline_ratio = singular_values[:, 1] / singular_values[:, 0]
+    baseline = np.column_stack([t, baseline_ratio])
+    sampled = np.column_stack(
+        [perturbed["coef"], perturbed["thickness_ratio"]],
+    )
+    labels = [f"PGA {i + 1}" for i in range(n_coord)] + ["thickness ratio"]
+    n_param = len(labels)
+
+    # Staircase (corner) layout: diagonal holds each parameter's
+    # marginal distribution, lower triangle holds pairwise scatters,
+    # upper triangle is left blank
+    fig, axes = plt.subplots(
+        n_param, n_param, figsize=(1.8 * n_param, 1.8 * n_param),
+    )
+    for i in range(n_param):
+        for j in range(n_param):
+            ax = axes[i, j]
+            if j > i:
+                ax.axis("off")
+                continue
+            if i == j:
+                ax.hist(
+                    sampled[:, i], bins=15, color=PERTURBED_COLOR, alpha=0.6,
+                    density=True, label="sampled points",
+                )
+                ax.set_yticks([])
+            else:
+                ax.scatter(
+                    sampled[:, j], sampled[:, i], s=10, color=PERTURBED_COLOR,
+                    alpha=0.5, zorder=1, label="sampled points",
+                )
+                ax.scatter(
+                    baseline[:, j], baseline[:, i], marker="*", s=150,
+                    color=BASELINE_COLOR, edgecolor="k", linewidth=0.5,
+                    zorder=2, label="baseline foils",
+                )
+                ax.grid(True, linewidth=0.3)
+            if i == n_param - 1:
+                ax.set_xlabel(labels[j])
+            else:
+                ax.set_xticklabels([])
+            if j == 0:
+                ax.set_ylabel(labels[i])
+            else:
+                ax.set_yticklabels([])
+
+    # Place the legend inside the blank upper-right triangle instead
+    # of outside the axes grid, so no extra top/right margin is added
+    handles, legend_labels = axes[1, 0].get_legend_handles_labels()
+    axes[0, n_param - 1].legend(
+        handles, legend_labels, loc="center", fontsize=10,
+    )
+    save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
+
+
+def _normalize_le_te(phys: np.ndarray) -> np.ndarray:
+    """Translate/rotate/scale so the LE is at (0, 0) and TE at (1, 0)."""
+    # Trailing edge is the midpoint of the first/last (upper/lower TE)
+    # points; leading edge is the point farthest from it, matching
+    # aerosandbox's Airfoil.normalize()
+    x_te, y_te = np.mean(phys[[0, -1]], axis=0)
+    dist_to_te = np.hypot(phys[:, 0] - x_te, phys[:, 1] - y_te)
+    le_index = np.argmax(dist_to_te)
+
+    # Translate LE to the origin, scale so chord length is 1
+    shifted = phys - phys[le_index]
+    scale = 1.0 / dist_to_te[le_index]
+    scaled = shifted * scale
+
+    # Rotate about the origin so the TE lands on the x-axis at (1, 0)
+    x_te, y_te = np.mean(scaled[[0, -1]], axis=0)
+    angle = -np.arctan2(y_te, x_te)
+    cos_a, sin_a = np.cos(angle), np.sin(angle)
+    rotation = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+    rotated = scaled @ rotation.T
+    return _snap_te_to_chord(rotated)
+
+
+def _snap_te_to_chord(phys: np.ndarray) -> np.ndarray:
+    """Slide each TE surface point to x/c = 1 along its own local slope."""
+    # The rotation above only pins the TE midpoint to (1, 0), leaving
+    # the individual upper/lower TE points straddling x/c = 1 (worse
+    # for a blunt TE). Extend/trim each surface along the line through
+    # its last two near-TE points instead, so both land exactly on
+    # x/c = 1 without disturbing the rest of the shape or its slope
+    out = phys.copy()
+    for te_idx, next_idx in ((0, 1), (-1, -2)):
+        x0, y0 = phys[te_idx]
+        x1, y1 = phys[next_idx]
+        if x1 != x0:
+            t = (1.0 - x0) / (x1 - x0)
+            out[te_idx] = [1.0, y0 + t * (y1 - y0)]
+    return out
+
+
+def perturb_grassmann(
+    basis: dict[str, object],
+    n_perturb: int = 20,
+    seed: int | None = None,
+) -> dict[str, np.ndarray]:
+    """Sample new shapes around the Karcher mean, as in g2aero's PGA space."""
+    rng = np.random.default_rng(seed)
+    mu, vh, t = basis["mu"], basis["Vh"], basis["t"]
+    m_mean, b_mean = np.mean(basis["M"], axis=0), np.mean(basis["b"], axis=0)
+
+    # Each foil's affine transform M scales the unit-covariance
+    # Grassmann shape by two singular values: a larger one along the
+    # chord and a smaller one along the thickness. Their ratio is a
+    # thickness/aspect-ratio parameter that compute_pga_basis's mean-M
+    # reconstruction was discarding, so sample it alongside the PGA
+    # coordinates instead of treating shape and thickness as separate
+    # stages
+    singular_values = np.linalg.svd(basis["M"], compute_uv=False)
+    ratio_min = np.min(singular_values[:, 1] / singular_values[:, 0])
+    ratio_max = np.max(singular_values[:, 1] / singular_values[:, 0])
+    u_mean, d_mean, vh_mean = np.linalg.svd(m_mean)
+
+    # Bound one joint 5-D box: the 4 PGA coordinates (each uniform
+    # within the full dataset's per-mode range, matching g2aero's
+    # Grassmann_PGAspace.sample_coef) plus the thickness ratio, so
+    # every perturbation draws all 5 parameters at once
+    axis_min = np.append(np.min(t, axis=0), ratio_min)
+    axis_max = np.append(np.max(t, axis=0), ratio_max)
+
+    # Exp-map each sampled coordinate from the Karcher mean back onto
+    # the Grassmann manifold, then onto x/y via the mean affine
+    # transform with the sampled thickness ratio. The reconstructed
+    # shape is renormalized (LE at (0, 0), TE at (1, 0), unit chord)
+    # afterward, since rescaling the thickness singular value alone
+    # can shift/rotate the reconstructed chord extent and leave the
+    # LE/TE off the y/c = 0 line. Resample on self-intersection,
+    # matching g2aero's generate_perturbed_shapes
+    gr_shapes = np.empty((n_perturb, mu.shape[0], 2))
+    coords = np.empty((n_perturb, mu.shape[0], 2))
+    coefs = np.empty((n_perturb, t.shape[1]))
+    ratios = np.empty(n_perturb)
+    for j in range(n_perturb):
+        while True:
+            sample = rng.uniform(axis_min, axis_max)
+            coef, ratio = sample[:-1], sample[-1]
+            m_sample = (
+                u_mean @ np.diag([d_mean[0], d_mean[0] * ratio]) @ vh_mean
+            )
+            gr_shape = perturb_gr_shape(vh, mu, coef)
+            phys = gr_shape @ m_sample + b_mean
+            phys = _normalize_le_te(phys)
+            if not check_selfintersect(phys):
+                break
+        gr_shapes[j] = gr_shape
+        coords[j], coefs[j], ratios[j] = phys, coef, ratio
+
+    return {
+        "X_gr": gr_shapes, "phys": coords, "coef": coefs,
+        "thickness_ratio": ratios,
+    }
+
+
+def add_pga_columns(
+    ds: xr.Dataset, perturbed: dict[str, np.ndarray],
+) -> xr.Dataset:
+    """Attach each shape's 5 varying params: 4 PGA coefs + thickness ratio."""
+    coef = perturbed["coef"]
+    coef_vars = {
+        f"pga_coef_{i}": (("foil_id",), coef[:, i])
+        for i in range(coef.shape[1])
+    }
+    return ds.assign(
+        thickness_ratio=(("foil_id",), perturbed["thickness_ratio"]),
+        **coef_vars,
+    )
+
+
+def add_shared_basis_params(
+    ds: xr.Dataset, basis: dict[str, object],
+) -> xr.Dataset:
+    """Attach the Karcher mean, PGA basis and mean affine transform."""
+    m_mean = np.mean(basis["M"], axis=0)
+    b_mean = np.mean(basis["b"], axis=0)
+
+    return ds.assign(
+        mu=(("point", "xy"), basis["mu"]),
+        Vh=(("mode", "point_xy_flat"), basis["Vh"]),
+        m_mean=(("xy", "xy2"), m_mean),
+        b_mean=(("xy",), b_mean),
+    )
+
+
+def _draw_physical_baseline(
+    ax: plt.Axes, shapes: dict[str, np.ndarray], karcher_phys: np.ndarray,
+) -> None:
+    """Plot dataset foils black, with the Karcher mean bold orange on top."""
+    for coords in shapes.values():
+        ax.plot(
+            coords[:, 0], coords[:, 1], color=BASELINE_COLOR, linewidth=0.5,
+        )
+    ax.plot(
+        karcher_phys[:, 0], karcher_phys[:, 1], color=MEAN_COLOR,
+        linewidth=2, label="Karcher mean",
+    )
+    ax.legend(fontsize=8)
+
+
+def _draw_physical_samples(
+    ax: plt.Axes, perturbed: dict[str, np.ndarray], karcher_phys: np.ndarray,
+) -> None:
+    """Plot perturbed samples as thin grey lines, with the Karcher mean."""
+    samples = perturbed["phys"]
+    for sample in samples:
+        ax.plot(
+            sample[:, 0], sample[:, 1], color=PERTURBED_COLOR, linewidth=0.5,
+            alpha=0.5,
+        )
+    ax.plot(
+        karcher_phys[:, 0], karcher_phys[:, 1], color=MEAN_COLOR,
+        linewidth=2, label="Karcher mean",
+    )
+    ax.legend(fontsize=8)
+
+
+def plot_perturbed_shapes(
+    shapes: dict[str, np.ndarray],
+    basis: dict[str, object],
+    perturbed: dict[str, np.ndarray],
+    save_path: str | None = None,
+) -> None:
+    """Plot physical baseline/perturbed foils, one full-width row each."""
+    fig, axes = plt.subplots(
+        2, 1, figsize=(7, 3.5), constrained_layout=True,
+    )
+
+    m_mean = np.mean(basis["M"], axis=0)
+    b_mean = np.mean(basis["b"], axis=0)
+    karcher_phys = basis["mu"] @ m_mean + b_mean
+
+    # Physical (x/c, y/c) baseline foils, then perturbed samples, each
+    # spanning the full row width with a true (equal) aspect ratio so
+    # the thin foil profiles are shown at their real proportions
+    _draw_physical_baseline(axes[0], shapes, karcher_phys)
+    _draw_physical_samples(axes[1], perturbed, karcher_phys)
+    for ax in axes:
+        ax.set_xlabel("x/c")
+        ax.set_ylabel("y/c")
+        ax.grid(True, linewidth=0.3)
+
+    save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
+
+
+def plot_grassmann_baseline_samples(
+    basis: dict[str, object],
+    perturbed: dict[str, np.ndarray],
+    save_path: str | None = None,
+) -> None:
+    """Plot Grassmann baseline/perturbed shapes, one square row each."""
+    fig, axes = plt.subplots(
+        2, 1, figsize=(7, 3.5), constrained_layout=True,
+    )
+
+    _draw_grassmann_baseline(axes[0], basis)
+    _draw_grassmann_samples(axes[1], perturbed, mu=basis["mu"])
+
+    save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
+
+
+def _draw_grassmann_perturbed(
+    ax: plt.Axes,
+    basis: dict[str, object],
+    perturbed: dict[str, np.ndarray],
+    title: str,
+) -> None:
+    """Plot every foil's baseline and the perturbed samples on the Grassmann."""
+    # All baseline foils in black, all perturbed samples (sampled around
+    # the Karcher mean) in grey, so the spread induced by perturbation is
+    # visible against the unperturbed Grassmann representations.
+    # Perturbed samples are drawn first so the black baselines stay on top
+    for j, gr_shape in enumerate(perturbed["X_gr"]):
+        ax.plot(
+            gr_shape[:, 0], gr_shape[:, 1], color=PERTURBED_COLOR,
+            linewidth=0.4, alpha=0.4, zorder=1,
+            label="perturbed" if j == 0 else None,
+        )
+    for i, desig in enumerate(basis["foil_ids"]):
+        x_gr = basis["X_gr"][i]
+        ax.plot(
+            x_gr[:, 0], x_gr[:, 1], color=BASELINE_COLOR, linewidth=0.5,
+            zorder=2, label="baseline" if i == 0 else None,
+        )
+    mu = basis["mu"]
+    ax.plot(
+        mu[:, 0], mu[:, 1], color=MEAN_COLOR, linewidth=2.5, zorder=3,
+        label="Karcher mean",
+    )
+
+    ax.set_box_aspect(1)
+    ax.set_xlabel("X_gr[:, 0]")
+    ax.set_ylabel("X_gr[:, 1]")
+    ax.set_title(title)
+    ax.legend(fontsize=8)
+    ax.grid(True, linewidth=0.3)
+
+
+def plot_grassmann_perturbed(
+    basis: dict[str, object],
+    perturbed: dict[str, np.ndarray],
+    save_path: str | None = None,
+    title: str = "Grassmann representation: baseline vs. perturbed",
+) -> None:
+    """Plot every foil's baseline and perturbed shapes on the Grassmann."""
+    fig, ax = plt.subplots(figsize=(4, 4))
+    _draw_grassmann_perturbed(ax, basis, perturbed, title)
+    plt.tight_layout()
+    save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
+
+
+def _draw_grassmann_baseline(
+    ax: plt.Axes, basis: dict[str, object],
+) -> None:
+    """Plot every foil's baseline Grassmann representation on one axes."""
+    # All baseline foils share one color/symbol and one legend entry,
+    # since individual foil identity isn't of interest here
+    for i, x_gr in enumerate(basis["X_gr"]):
+        ax.plot(
+            x_gr[:, 0], x_gr[:, 1], color=BASELINE_COLOR, linewidth=0.5,
+            label="baseline" if i == 0 else None,
+        )
+    mu = basis["mu"]
+    ax.plot(
+        mu[:, 0], mu[:, 1], color=MEAN_COLOR, linewidth=2.5, zorder=3,
+        label="Karcher mean",
+    )
+
+    ax.set_xlabel("X_gr[:, 0]")
+    ax.set_ylabel("X_gr[:, 1]")
+    ax.legend(fontsize=8)
+    ax.grid(True, linewidth=0.3)
+
+
+def _draw_grassmann_samples(
+    ax: plt.Axes, perturbed: dict[str, np.ndarray], mu: np.ndarray,
+) -> None:
+    """Plot every perturbed sample's Grassmann representation on one axes."""
+    samples = perturbed["X_gr"]
+    for i, sample in enumerate(samples):
+        ax.plot(
+            sample[:, 0], sample[:, 1], color=PERTURBED_COLOR, linewidth=0.5,
+            alpha=0.5, label="perturbed" if i == 0 else None,
+        )
+    ax.plot(
+        mu[:, 0], mu[:, 1], color=MEAN_COLOR, linewidth=2.5, zorder=3,
+        label="Karcher mean",
+    )
+
+    ax.set_xlabel("X_gr[:, 0]")
+    ax.set_ylabel("X_gr[:, 1]")
+    ax.legend(fontsize=8)
+    ax.grid(True, linewidth=0.3)
+
+

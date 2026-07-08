@@ -1,34 +1,44 @@
-# hydrofoil-data
+# foilpolars
 
-Multifidelity aerodynamic data generation for hydrofoil/tidal-turbine
+Multifidelity aerodynamic polar data generation for hydrofoil/tidal-turbine
 airfoil sections, combining XFoil (panel method) and NeuralFoil
 (neural-network surrogate) solvers.
 
 ## What it does
 
-For each airfoil, angle of attack, and Reynolds number in the sweep
-config, the pipeline runs both solvers and assembles the results into a
-single `xarray` dataset (`Cl`, `Cd`, `Cm`, `Cp_min`, convergence/confidence
-flags), then derives a cavitation-inception proxy and writes comparison
-plots per airfoil/Re.
+The baseline airfoils in the sweep config are loaded (optionally
+repanelled), then mapped onto a Grassmannian shape space (via G2Aero) to
+compute a Karcher mean and PGA basis. New shapes are sampled around that
+basis, and for each perturbed shape, angle of attack, Reynolds number,
+and `n_crit` in the config, both solvers are run and the results are
+assembled into a single `xarray` dataset (`Cl`, `Cd`, `Cm`, `Cp_min`,
+convergence/confidence flags, PGA shape parameters), from which a
+cavitation-inception proxy is derived and comparison plots are written
+per shape/Re/`n_crit`.
 
 ## Layout
 
-- `hydrofoil_data/shapes.py` — loads airfoil coordinates via AeroSandbox.
-- `hydrofoil_data/solvers/xfoil_solver.py` — drives the compiled
+- `foilpolars/shapes.py` — loads airfoil coordinates via AeroSandbox,
+  applying local coordinate fixes from `foilpolars/airfoil_fixes/`
+  where present.
+- `foilpolars/grassmann.py` — Grassmannian shape parameterization
+  (Karcher mean, PGA basis) and perturbed-shape sampling, via G2Aero.
+- `foilpolars/solvers/xfoil_solver.py` — drives the compiled
   `bin/xfoil` binary through a batch script and parses its polar output.
-- `hydrofoil_data/solvers/neuralfoil_solver.py` — wraps the NeuralFoil
+- `foilpolars/solvers/neuralfoil_solver.py` — wraps the NeuralFoil
   surrogate model.
-- `hydrofoil_data/sweep.py` — orchestrates the sweep over
-  (foil, alpha, Re, fidelity) and builds the combined `xarray.Dataset`.
-- `hydrofoil_data/postprocess.py` — cavitation proxy, convergence
+- `foilpolars/sweep.py` — orchestrates the sweep over
+  (shape, alpha, Re, n_crit, fidelity) and builds the combined
+  `xarray.Dataset`.
+- `foilpolars/postprocess.py` — cavitation proxy, convergence
   summary, and plotting (lift/drag polars, Cp_min, confidence maps,
   cavitation bucket).
-- `hydrofoil_data/get_nf_airfoils.py` — lists airfoils in the
-  AeroSandbox/NeuralFoil training database.
-- `hydrofoil_data/cli.py` — `hfdata` command-line entry point
-  (`run`, `get-foils`, `list-foils`).
-- `configs/sweep_config.yaml` — airfoils, repanelling, alpha/Re ranges,
+- `foilpolars/utils.py` — lists airfoils in the AeroSandbox/
+  NeuralFoil training database, plus other small shared helpers.
+- `foilpolars/cli.py` — `foilpolars` command-line entry point
+  (`run`, `get-foils`, `grassmann`, `plot`, `list-foils`).
+- `configs/sweep_config.yaml` / `configs/sweep_config_small.yaml` —
+  airfoils, repanelling, Grassmann perturbation, alpha/Re/n_crit ranges,
   solver settings, and operating conditions (chord, depth, temperature)
   for a sweep.
 
@@ -45,12 +55,18 @@ may affect solver accuracy/convergence.
 ## Usage
 
 ```bash
-hfdata run --config configs/sweep_config.yaml
-hfdata get-foils --config configs/sweep_config.yaml
-hfdata list-foils
+foilpolars run --config configs/sweep_config.yaml
+foilpolars get-foils --config configs/sweep_config.yaml
+foilpolars grassmann --config configs/sweep_config.yaml
+foilpolars plot --config configs/sweep_config.yaml
+foilpolars list-foils
 ```
 
-Output dataset and figures are written under `output/`.
+`run` also rebuilds the Grassmann/perturbed-shape artifacts before
+sweeping; `grassmann` rebuilds just those artifacts on their own, and
+`plot` regenerates comparison figures from an already-saved dataset.
+Output dataset and figures are written under `output/`. `submit_full_sweep.sh`
+runs the full `grassmann` → `run` → `plot` sequence as a Slurm job.
 
 ## Requirements
 

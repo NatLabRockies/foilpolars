@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
-import xarray as xr
+
+from foilpolars.utils import save_or_show
 
 if TYPE_CHECKING:
     import aerosandbox as asb
@@ -59,62 +60,49 @@ def load_raw_shapes(config: dict) -> dict[str, np.ndarray]:
     return shapes
 
 
-def save_raw_shapes(
-    shapes: dict[str, np.ndarray], out_dir: str = "output/data/raw_shapes"
-) -> None:
-    """Write each airfoil's raw coordinates to its own x/c, y/c txt file."""
-    os.makedirs(out_dir, exist_ok=True)
-
-    # Write one file per airfoil, named after its designation
-    for desig, coords in shapes.items():
-        path = os.path.join(out_dir, f"{desig}_raw.txt")
-        np.savetxt(path, coords, fmt="%.6f", header="x/c y/c")
-        print(f"Saved {path}")
-
-
 def save_shapes(
-    shapes: dict[str, np.ndarray], out_path: str = "output/data/hydrofoil_hkt5"
+    shapes: dict[str, np.ndarray],
+    out_dir: str = "output/data/shapes",
+    header: str = "x/c,y/c",
+    extra_columns: dict[str, dict[str, object]] | None = None,
 ) -> None:
-    """Write all foils' coordinates to one txt and one nc file, NaN-padded."""
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    """Write each foil's 2-column coordinates to its own csv, plus an index."""
+    os.makedirs(out_dir, exist_ok=True)
     foil_ids = list(shapes.keys())
-    n_points = max(shapes[foil_id].shape[0] for foil_id in foil_ids)
 
-    # Pad every foil's coordinates to the same length with NaN
-    coords = np.full((len(foil_ids), n_points, 2), np.nan)
-    for i, foil_id in enumerate(foil_ids):
-        n = shapes[foil_id].shape[0]
-        coords[i, :n, :] = shapes[foil_id]
+    # One coordinate file per foil, named after its id
+    for foil_id in foil_ids:
+        path = os.path.join(out_dir, f"{foil_id}.csv")
+        np.savetxt(
+            path, shapes[foil_id], fmt="%.6f", delimiter=",",
+            header=header, comments="",
+        )
 
-    # Write one foil-name header followed by its x/c, y/c rows per block
-    txt_path = f"{out_path}_shapes.txt"
-    with open(txt_path, "w") as f:
+    # Index file mapping each foil id to its coordinate file, plus any
+    # caller-supplied per-foil metadata (e.g. affine transform, PGA
+    # coords) merged in as extra columns
+    extra_names = list(next(iter(extra_columns.values())).keys()) \
+        if extra_columns else []
+    index_path = os.path.join(out_dir, "index.csv")
+    with open(index_path, "w") as f:
+        f.write(",".join(["foil_id", "n_points", "file", *extra_names]))
+        f.write("\n")
         for foil_id in foil_ids:
-            f.write(f"# {foil_id}\n")
-            np.savetxt(f, shapes[foil_id], fmt="%.6f")
+            n_points = shapes[foil_id].shape[0]
+            row = [foil_id, n_points, f"{foil_id}.csv"]
+            if extra_columns is not None:
+                row += [extra_columns[foil_id][name] for name in extra_names]
+            f.write(",".join(str(v) for v in row))
             f.write("\n")
-    print(f"Saved {txt_path}")
-
-    # Combine every foil's coordinates into one nc file along foil_id
-    nc_path = f"{out_path}_shapes.nc"
-    ds = xr.Dataset(
-        {
-            "x": (("foil_id", "point"), coords[:, :, 0]),
-            "y": (("foil_id", "point"), coords[:, :, 1]),
-        },
-        coords={"foil_id": foil_ids},
-    )
-    ds.to_netcdf(nc_path)
-    print(f"Saved {nc_path}")
+    print(f"Saved {len(foil_ids)} shape files to {out_dir}")
+    print(f"Saved {index_path}")
 
 
 def plot_shapes(
-    shapes: dict[str, np.ndarray],
-    save_path: str | None = None,
-    title: str = "Airfoil profiles",
+    shapes: dict[str, np.ndarray], save_path: str | None = None,
 ) -> None:
     """Overlay all airfoil profiles on one axes, normalised to unit chord."""
-    fig, ax = plt.subplots(figsize=(12, 4))
+    fig, ax = plt.subplots(figsize=(8, 2.7))
 
     for desig, coords in shapes.items():
         ax.plot(
@@ -125,16 +113,10 @@ def plot_shapes(
     ax.set_aspect("equal")
     ax.set_xlabel("x/c")
     ax.set_ylabel("y/c")
-    ax.set_title(title)
-    ax.legend(fontsize=7, ncol=3)
     ax.grid(True, linewidth=0.3)
-    plt.tight_layout()
 
-    # Save to file if requested, otherwise show interactively
-    if save_path is not None:
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        fig.savefig(save_path, dpi=150)
-        plt.close(fig)
-        print(f"Saved {save_path}")
-    else:
-        plt.show()
+    # Legend below the axes, not on top of the foil shapes
+    ax.legend(
+        fontsize=7, ncol=6, loc="upper center", bbox_to_anchor=(0.5, -0.2),
+    )
+    save_or_show(fig, save_path, dpi=150, bbox_inches="tight")

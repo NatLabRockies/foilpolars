@@ -33,10 +33,13 @@ def run_xfoil(
     alphas_sorted = sorted(float(a) for a in alphas)
 
     with tempfile.TemporaryDirectory() as tmp:
+        # Write the foil coordinates and batch script into the temp dir
+        # XFoil will run in
         tmp_path = Path(tmp)
         _write_dat(tmp_path / "foil.dat", coords)
         script = _build_script(re, n_crit, max_iter, alphas_sorted)
 
+        # Run XFoil, tolerating a hang via the timeout instead of raising
         try:
             subprocess.run(
                 [str(XFOIL_BIN)],
@@ -50,6 +53,7 @@ def run_xfoil(
         except subprocess.TimeoutExpired:
             logger.error("XFoil timed out for Re=%.0f", re)
 
+        # Parse the polar file if XFoil produced one, else an empty frame
         polar_path = tmp_path / "foil.polar"
         polar = _parse_polar(polar_path) if polar_path.exists() else (
             pd.DataFrame(columns=POLAR_COLS)
@@ -73,6 +77,7 @@ def _build_script(
     re: float, n_crit: float, max_iter: int, alphas: list[float],
 ) -> str:
     """Build an XFoil batch script: load, set up OPER, sweep, save polar."""
+    # Derive the sweep range/step from the sorted alpha list
     a_lo, a_hi = alphas[0], alphas[-1]
     step = round(alphas[1] - alphas[0], 6) if len(alphas) > 1 else 0.5
     return "\n".join([
@@ -101,6 +106,7 @@ def _build_script(
 
 def _parse_polar(path: Path) -> pd.DataFrame:
     """Parse an XFoil .polar file (header + dashed separator + rows)."""
+    # Locate the header row, then parse the data rows beneath it
     lines = path.read_text().splitlines()
     try:
         header_idx = next(
@@ -124,6 +130,7 @@ def _to_result(
     polar: pd.DataFrame, alphas: list[float], re: float,
 ) -> pd.DataFrame:
     """Reindex a parsed polar onto the requested alpha grid, flagging gaps."""
+    # Index the parsed polar rows by their rounded alpha for lookup below
     lookup: dict[float, pd.Series] = {}
     if not polar.empty:
         for _, row in polar.iterrows():

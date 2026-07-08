@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "hydrofoil-data"
+name = "foilpolars"
 version = "0.1.0"
-description = "Multifidelity aerodynamic data for NACA hydrofoil profiles"
+description = "Multifidelity aerodynamic polar data for NACA hydrofoil profiles"
 requires-python = ">=3.11"
 dependencies = [
     "neuralfoil>=0.3.0",
@@ -16,16 +16,20 @@ dependencies = [
     "xarray>=2024.1",
     "netCDF4>=1.6",
     "matplotlib>=3.8",
+    "g2aero",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "pytest-cov"]
 
 [project.scripts]
-hfdata = "hydrofoil_data.cli:main"
+foilpolars = "foilpolars.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["hydrofoil_data"]
+packages = ["foilpolars"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.sources]
+g2aero = { git = "https://github.com/NatLabRockies/G2Aero.git" }
