@@ -14,6 +14,8 @@ def run_neuralfoil(
     re: float,
     model_size: str = "large",
     n_crit: float = 9.0,
+    xtr_upper: float = 1.0,
+    xtr_lower: float = 1.0,
 ) -> pd.DataFrame:
     """Run NeuralFoil for one airfoil across alphas at one Reynolds number."""
     import neuralfoil as nf
@@ -27,6 +29,8 @@ def run_neuralfoil(
                 alpha=alpha,
                 Re=re,
                 n_crit=n_crit,
+                xtr_upper=xtr_upper,
+                xtr_lower=xtr_lower,
                 model_size=model_size,
             )
         except Exception as exc:

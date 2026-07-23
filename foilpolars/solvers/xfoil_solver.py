@@ -25,6 +25,8 @@ def run_xfoil(
     re: float,
     n_crit: float = 9.0,
     max_iter: int = 100,
+    xtr_top: float = 1.0,
+    xtr_bot: float = 1.0,
 ) -> pd.DataFrame:
     """Run XFoil for one airfoil across alphas at one Reynolds number."""
     # Sweep outward from 0 deg in two legs: ASEQ auto-halts after 4
@@ -37,7 +39,9 @@ def run_xfoil(
         # XFoil will run in
         tmp_path = Path(tmp)
         _write_dat(tmp_path / "foil.dat", coords)
-        script = _build_script(re, n_crit, max_iter, alphas_sorted)
+        script = _build_script(
+            re, n_crit, max_iter, alphas_sorted, xtr_top, xtr_bot,
+        )
 
         # Run XFoil, tolerating a hang via the timeout instead of raising
         try:
@@ -75,11 +79,16 @@ def _write_dat(path: Path, coords: np.ndarray) -> None:
 
 def _build_script(
     re: float, n_crit: float, max_iter: int, alphas: list[float],
+    xtr_top: float = 1.0, xtr_bot: float = 1.0,
 ) -> str:
     """Build an XFoil batch script: load, set up OPER, sweep, save polar."""
     # Derive the sweep range/step from the sorted alpha list
     a_lo, a_hi = alphas[0], alphas[-1]
     step = round(alphas[1] - alphas[0], 6) if len(alphas) > 1 else 0.5
+
+    # XTR forces transition at a fixed x/c (top, bottom) instead of
+    # letting the eN method predict it; xtr=1.0 leaves it disabled, since
+    # eN can't represent bypass transition at high freestream turbulence
     return "\n".join([
         "LOAD foil.dat",
         "foil",
@@ -87,6 +96,7 @@ def _build_script(
         "OPER",
         "VPAR",
         f"N {n_crit:g}",
+        f"XTR {xtr_top:g} {xtr_bot:g}",
         "",
         f"VISC {re:g}",
         "MACH 0.0",

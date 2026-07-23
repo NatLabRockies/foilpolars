@@ -24,7 +24,7 @@ repanel:
   n_points_per_side: 100
 
 grassmann:
-  n_perturb: 1000         # number of perturbed shapes to sample
+  n_perturb: 10000        # number of perturbed shapes to sample
   seed: 0               # rng seed for reproducible sampling
 
 solvers:
@@ -42,6 +42,10 @@ operating:
     step: 1
   reynolds: [5e+5, 1e+6, 3e+6, 5e+6, 1e+7]
   n_crit: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]               # shared by NeuralFoil and XFoil
+  forced_transition:  # eN can't represent Tu above ~3%, so pin xtr instead
+    - tu: 5.0        # %, e.g. high-ambient-turbulence / wake inflow
+      xtr_top: 0.05  # x/c trip location, both surfaces near the LE
+      xtr_bot: 0.05
 
 cavitation:
   chord: 0.5        # m — mid-span chord, full-scale tidal
@@ -53,4 +57,4 @@ output:
   save_cp: true
 
 
-# 8*5*40*1000 = 1,600,000 total simulations (aoa * reynolds * n_crit * n_perturb)
+# 31*5*14*10000 = 21,700,000 total simulations (aoa * reynolds * n_crit * n_perturb)

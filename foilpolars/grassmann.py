@@ -12,6 +12,7 @@ from g2aero.Grassmann import (
     perturb_gr_shape,
 )
 from g2aero.utils import check_selfintersect
+from scipy.stats import gaussian_kde
 
 from foilpolars.utils import save_or_show
 
@@ -61,6 +62,50 @@ def save_grassmann_baseline(
         x_gr, out_dir=out_dir, header="Xgr_0,Xgr_1",
         extra_columns=extra_columns,
     )
+
+
+def save_grassmann_cache(
+    path: str,
+    repaneled_shapes: dict[str, np.ndarray],
+    basis: dict[str, object],
+    perturbed: dict[str, np.ndarray],
+) -> None:
+    """Cache repaneled shapes, PGA basis and perturbed samples for replot."""
+    # A single npz beside the sweep output lets `plot` redraw every
+    # Grassmann figure without repeating the PGA/Karcher computation
+    foil_ids = list(repaneled_shapes.keys())
+    np.savez(
+        path,
+        shape_foil_ids=np.array(foil_ids),
+        shapes=np.stack([repaneled_shapes[i] for i in foil_ids]),
+        basis_foil_ids=np.array(basis["foil_ids"]),
+        basis_X_gr=basis["X_gr"], basis_M=basis["M"], basis_b=basis["b"],
+        basis_mu=basis["mu"], basis_Vh=basis["Vh"], basis_t=basis["t"],
+        perturbed_X_gr=perturbed["X_gr"], perturbed_phys=perturbed["phys"],
+        perturbed_coef=perturbed["coef"],
+        perturbed_thickness_ratio=perturbed["thickness_ratio"],
+    )
+
+
+def load_grassmann_cache(
+    path: str,
+) -> tuple[
+    dict[str, np.ndarray], dict[str, object], dict[str, np.ndarray],
+]:
+    """Reload the cached shapes, PGA basis and perturbed samples."""
+    data = np.load(path)
+    repaneled_shapes = dict(zip(data["shape_foil_ids"], data["shapes"]))
+    basis = {
+        "foil_ids": list(data["basis_foil_ids"]), "X_gr": data["basis_X_gr"],
+        "M": data["basis_M"], "b": data["basis_b"], "mu": data["basis_mu"],
+        "Vh": data["basis_Vh"], "t": data["basis_t"],
+    }
+    perturbed = {
+        "X_gr": data["perturbed_X_gr"], "phys": data["perturbed_phys"],
+        "coef": data["perturbed_coef"],
+        "thickness_ratio": data["perturbed_thickness_ratio"],
+    }
+    return repaneled_shapes, basis, perturbed
 
 
 def shapes_dict(
@@ -172,6 +217,85 @@ def plot_pga_embedding(
     save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
 
 
+def _draw_pga_corner(
+    sampled: np.ndarray,
+    labels: list[str],
+    baseline: np.ndarray | None = None,
+    title: str | None = None,
+) -> plt.Figure:
+    """Corner (staircase) plot of sample density, baseline stars optional."""
+    n_param = len(labels)
+    grid_size = 60
+
+    # Staircase (corner) layout: diagonal holds each parameter's
+    # marginal distribution, lower triangle holds pairwise KDE density
+    # contours, upper triangle is left blank
+    fig, axes = plt.subplots(
+        n_param, n_param, figsize=(1.8 * n_param, 1.8 * n_param),
+    )
+    contour = None
+    for i in range(n_param):
+        for j in range(n_param):
+            ax = axes[i, j]
+            if j > i:
+                ax.axis("off")
+                continue
+            if i == j:
+                ax.hist(
+                    sampled[:, i], bins=15, color=PERTURBED_COLOR, alpha=0.6,
+                    density=True,
+                )
+                ax.set_yticks([])
+            else:
+                # Gaussian KDE evaluated on a regular grid, then drawn as
+                # filled contours so the sample cloud reads as a smooth
+                # density surface instead of individual points
+                x, y = sampled[:, j], sampled[:, i]
+                kde = gaussian_kde(np.vstack([x, y]))
+                xi = np.linspace(x.min(), x.max(), grid_size)
+                yi = np.linspace(y.min(), y.max(), grid_size)
+                xx, yy = np.meshgrid(xi, yi)
+                zz = kde(np.vstack([xx.ravel(), yy.ravel()]))
+                contour = ax.contourf(
+                    xx, yy, zz.reshape(xx.shape), levels=12, cmap="viridis",
+                )
+                if baseline is not None:
+                    ax.scatter(
+                        baseline[:, j], baseline[:, i], marker="*", s=60,
+                        color=BASELINE_COLOR, edgecolor="k", linewidth=0.5,
+                        zorder=2, label="baseline foils",
+                    )
+                ax.grid(True, linewidth=0.3)
+            if i == n_param - 1:
+                ax.set_xlabel(labels[j])
+            else:
+                ax.set_xticklabels([])
+            if j == 0:
+                ax.set_ylabel(labels[i])
+            else:
+                ax.set_yticklabels([])
+
+    # Place the baseline legend and a density colorbar inside the blank
+    # upper-right triangle instead of outside the axes grid, so no extra
+    # top/right margin is added
+    if baseline is not None:
+        handles, legend_labels = axes[1, 0].get_legend_handles_labels()
+        axes[0, n_param - 1].legend(
+            handles, legend_labels, loc="center", fontsize=10,
+        )
+    if contour is not None and n_param > 2:
+        # A fresh, narrower axes instead of the blank grid cell itself,
+        # since that cell's ticks/labels were already switched off above
+        pos = axes[1, n_param - 1].get_position()
+        cax = fig.add_axes((
+            pos.x0 + pos.width * 0.35, pos.y0, pos.width * 0.3, pos.height,
+        ))
+        fig.colorbar(contour, cax=cax, label="density")
+    if title is not None:
+        fig.suptitle(title)
+    return fig
+
+
 def plot_pga_pairs(
     basis: dict[str, object],
     perturbed: dict[str, np.ndarray],
@@ -192,52 +316,8 @@ def plot_pga_pairs(
         [perturbed["coef"], perturbed["thickness_ratio"]],
     )
     labels = [f"PGA {i + 1}" for i in range(n_coord)] + ["thickness ratio"]
-    n_param = len(labels)
 
-    # Staircase (corner) layout: diagonal holds each parameter's
-    # marginal distribution, lower triangle holds pairwise scatters,
-    # upper triangle is left blank
-    fig, axes = plt.subplots(
-        n_param, n_param, figsize=(1.8 * n_param, 1.8 * n_param),
-    )
-    for i in range(n_param):
-        for j in range(n_param):
-            ax = axes[i, j]
-            if j > i:
-                ax.axis("off")
-                continue
-            if i == j:
-                ax.hist(
-                    sampled[:, i], bins=15, color=PERTURBED_COLOR, alpha=0.6,
-                    density=True, label="sampled points",
-                )
-                ax.set_yticks([])
-            else:
-                ax.scatter(
-                    sampled[:, j], sampled[:, i], s=10, color=PERTURBED_COLOR,
-                    alpha=0.5, zorder=1, label="sampled points",
-                )
-                ax.scatter(
-                    baseline[:, j], baseline[:, i], marker="*", s=150,
-                    color=BASELINE_COLOR, edgecolor="k", linewidth=0.5,
-                    zorder=2, label="baseline foils",
-                )
-                ax.grid(True, linewidth=0.3)
-            if i == n_param - 1:
-                ax.set_xlabel(labels[j])
-            else:
-                ax.set_xticklabels([])
-            if j == 0:
-                ax.set_ylabel(labels[i])
-            else:
-                ax.set_yticklabels([])
-
-    # Place the legend inside the blank upper-right triangle instead
-    # of outside the axes grid, so no extra top/right margin is added
-    handles, legend_labels = axes[1, 0].get_legend_handles_labels()
-    axes[0, n_param - 1].legend(
-        handles, legend_labels, loc="center", fontsize=10,
-    )
+    fig = _draw_pga_corner(sampled, labels, baseline=baseline)
     save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
 
 
@@ -343,10 +423,25 @@ def perturb_grassmann(
     }
 
 
+def reconstruct_phys_shape(
+    mu: np.ndarray, vh: np.ndarray, m_mean: np.ndarray, b_mean: np.ndarray,
+    coef: np.ndarray, ratio: float,
+) -> np.ndarray:
+    """Rebuild one perturbed shape's (x/c, y/c) from its saved PGA params."""
+    # Same exp-map + affine reconstruction as perturb_grassmann's sampling
+    # step, replayed for a single (coef, ratio) pair pulled back out of a
+    # saved dataset instead of a fresh random draw
+    u_mean, d_mean, vh_mean = np.linalg.svd(m_mean)
+    m_sample = u_mean @ np.diag([d_mean[0], d_mean[0] * ratio]) @ vh_mean
+    gr_shape = perturb_gr_shape(vh, mu, coef)
+    phys = gr_shape @ m_sample + b_mean
+    return _normalize_le_te(phys)
+
+
 def add_pga_columns(
     ds: xr.Dataset, perturbed: dict[str, np.ndarray],
 ) -> xr.Dataset:
-    """Attach each shape's 5 varying params: 4 PGA coefs + thickness ratio."""
+    """Attach each shape's PGA coefs, SVD thickness ratio and t/c_max."""
     coef = perturbed["coef"]
     coef_vars = {
         f"pga_coef_{i}": (("foil_id",), coef[:, i])
@@ -354,6 +449,7 @@ def add_pga_columns(
     }
     return ds.assign(
         thickness_ratio=(("foil_id",), perturbed["thickness_ratio"]),
+        thickness_max=(("foil_id",), _max_thickness(perturbed["phys"])),
         **coef_vars,
     )
 
@@ -430,6 +526,43 @@ def plot_perturbed_shapes(
         ax.set_ylabel("y/c")
         ax.grid(True, linewidth=0.3)
 
+    save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
+
+
+def _te_thickness(coords: np.ndarray) -> np.ndarray:
+    """Gap between each foil's upper/lower TE points (index 0 and -1)."""
+    return np.abs(coords[..., 0, 1] - coords[..., -1, 1])
+
+
+def _max_thickness(coords: np.ndarray) -> np.ndarray:
+    """Per-shape max upper/lower surface separation (t/c), via aerosandbox."""
+    import aerosandbox as asb
+
+    return np.array([
+        asb.Airfoil(coordinates=c).max_thickness() for c in coords
+    ])
+
+
+def plot_te_thickness_histogram(
+    perturbed: dict[str, np.ndarray], save_path: str | None = None,
+) -> None:
+    """Histogram of perturbed trailing-edge thickness (y/c)."""
+    # Trailing edge thickness per perturbed sample, in physical
+    # (x/c, y/c) coordinates
+    perturbed_te = _te_thickness(perturbed["phys"])
+
+    # Log-spaced bins so equal-width bars on the log x-axis still
+    # resolve the low-thickness end of the distribution
+    log_bins = np.logspace(
+        np.log10(perturbed_te.min()), np.log10(perturbed_te.max()), 100,
+    )
+
+    fig, ax = plt.subplots(figsize=(9, 3.5))
+    ax.hist(perturbed_te, bins=log_bins, color="tab:blue", alpha=0.7)
+    ax.set_xscale("log")
+    ax.set_xlabel("trailing-edge thickness (y/c)")
+    ax.set_ylabel("count")
+    ax.grid(True, linewidth=0.3)
     save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
 
 
