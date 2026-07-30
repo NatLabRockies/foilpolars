@@ -2,7 +2,6 @@
 
 from foilpolars.postprocess import (
     compute_cavitation_sigma,
-    plot_confidence_map,
     plot_foil_re_comparison,
     plot_summary,
     summarize_convergence,
@@ -12,7 +11,6 @@ from foilpolars.sweep import run_full_sweep
 
 __all__ = [
     "compute_cavitation_sigma",
-    "plot_confidence_map",
     "plot_foil_re_comparison",
     "plot_summary",
     "summarize_convergence",

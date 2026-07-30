@@ -6,6 +6,11 @@ build-backend = "hatchling.build"
 name = "foilpolars"
 version = "0.1.0"
 description = "Multifidelity aerodynamic polar data for NACA hydrofoil profiles"
+readme = "README.md"
+license = "BSD-3-Clause"
+authors = [
+    { name = "Rimple Sandhu", email = "sandhu.rimple87@gmail.com" },
+]
 requires-python = ">=3.11"
 dependencies = [
     "neuralfoil>=0.3.0",
@@ -16,11 +21,16 @@ dependencies = [
     "xarray>=2024.1",
     "netCDF4>=1.6",
     "matplotlib>=3.8",
+    "scipy>=1.11",
+    "aerosandbox>=4.2.4",
     "g2aero",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "pytest-cov"]
+
+[project.urls]
+Repository = "https://github.com/rimplesandhu/foilpolars"
 
 [project.scripts]
 foilpolars = "foilpolars.cli:main"

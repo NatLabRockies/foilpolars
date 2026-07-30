@@ -94,52 +94,6 @@ def save_full_results(ds: xr.Dataset, out_path: str) -> None:
     print(f"Saved {out_path}")
 
 
-def plot_confidence_map(ds: xr.Dataset) -> None:
-    """Heatmap of NeuralFoil analysis_confidence over (alpha, foil_id)."""
-    if "analysis_confidence" not in ds.data_vars:
-        print("analysis_confidence not in dataset; skipping.")
-        return
-    if "neuralfoil" not in ds["fidelity"].values:
-        print("neuralfoil fidelity not in dataset; skipping.")
-        return
-
-    # Use middle Re and n_crit values
-    re_values = ds["Re"].values
-    re_mid = re_values[len(re_values) // 2]
-    n_crit_mid = ds["n_crit"].values[len(ds["n_crit"]) // 2]
-
-    data = (
-        ds["analysis_confidence"]
-        .sel(Re=re_mid, n_crit=n_crit_mid, fidelity="neuralfoil")
-        .values
-    )  # shape: (n_foils, n_alpha)
-
-    foil_ids = ds["foil_id"].values
-    alphas = ds["alpha"].values
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    im = ax.pcolormesh(
-        alphas,
-        np.arange(len(foil_ids)),
-        data,
-        cmap="RdYlGn",
-        shading="auto",
-        vmin=0,
-        vmax=1,
-    )
-    fig.colorbar(im, ax=ax, label="Analysis confidence")
-    ax.set_yticks(np.arange(len(foil_ids)))
-    ax.set_yticklabels(foil_ids, fontsize=8)
-    ax.set_xlabel(r"$\alpha$ (deg)")
-    ax.set_title(
-        f"NeuralFoil analysis confidence map  Re={re_mid:.0e}"
-    )
-    fig.tight_layout()
-
-    fname = "output/figures/confidence_map_neuralfoil.png"
-    save_or_show(fig, fname, dpi=150)
-
-
 def _boxplot_by_foil(
     ax: plt.Axes, nf_conf: xr.DataArray, foil_ids: np.ndarray,
 ) -> None:

@@ -103,9 +103,10 @@ def _make_minimal_dataset() -> xr.Dataset:
     foils = ["16-012"]
     alphas = [0.0, 2.0, 4.0]
     re_vals = [1e6]
+    n_crit_vals = [9.0]
     fids = ["neuralfoil", "xfoil"]
-    shape = (1, 3, 1, 2)
-    dims = ("foil_id", "alpha", "Re", "fidelity")
+    shape = (1, 3, 1, 1, 2)
+    dims = ("foil_id", "alpha", "Re", "n_crit", "fidelity")
 
     rng = np.random.default_rng(42)
     cp_data = -rng.uniform(0.1, 1.5, shape)
@@ -123,6 +124,7 @@ def _make_minimal_dataset() -> xr.Dataset:
             "foil_id": foils,
             "alpha": alphas,
             "Re": re_vals,
+            "n_crit": n_crit_vals,
             "fidelity": fids,
         },
     )

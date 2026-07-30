@@ -52,6 +52,12 @@ unchanged instead — both XFoil and NeuralFoil accept arbitrary coordinate
 arrays, so this is safe, but irregular point spacing in the raw tables
 may affect solver accuracy/convergence.
 
+## Installation
+
+```bash
+uv sync
+```
+
 ## Usage
 
 ```bash
@@ -59,12 +65,15 @@ foilpolars run --config configs/sweep_config.yaml
 foilpolars get-foils --config configs/sweep_config.yaml
 foilpolars grassmann --config configs/sweep_config.yaml
 foilpolars plot --config configs/sweep_config.yaml
+foilpolars plot-worst-foil --config configs/sweep_config.yaml -n 5
 foilpolars list-foils
 ```
 
 `run` also rebuilds the Grassmann/perturbed-shape artifacts before
 sweeping; `grassmann` rebuilds just those artifacts on their own, and
-`plot` regenerates comparison figures from an already-saved dataset.
+`plot` regenerates every figure except the per-(foil, Re, n_crit)
+comparison plots. `plot-worst-foil` reloads a saved sweep dataset and
+plots those comparison figures for the `-n` worst-converging foils.
 Output dataset and figures are written under `output/`. `submit_full_sweep.sh`
 runs the full `grassmann` → `run` → `plot` sequence as a Slurm job.
 
@@ -72,6 +81,10 @@ runs the full `grassmann` → `run` → `plot` sequence as a Slurm job.
 
 Needs a local XFoil binary at `bin/xfoil` (not tracked in this repo —
 build it from `xfoil_src/` or your own XFoil install).
+
+## License
+
+BSD-3-Clause, see [LICENSE](LICENSE).
 
 ## Author
 

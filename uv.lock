@@ -339,6 +339,7 @@ name = "foilpolars"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aerosandbox" },
     { name = "g2aero" },
     { name = "h5py" },
     { name = "matplotlib" },
@@ -347,6 +348,7 @@ dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyyaml" },
+    { name = "scipy" },
     { name = "xarray" },
 ]
 
@@ -358,6 +360,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aerosandbox", specifier = ">=4.2.4" },
     { name = "g2aero", git = "https://github.com/NatLabRockies/G2Aero.git" },
     { name = "h5py", specifier = ">=3.9" },
     { name = "matplotlib", specifier = ">=3.8" },
@@ -368,6 +371,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "scipy", specifier = ">=1.11" },
     { name = "xarray", specifier = ">=2024.1" },
 ]
 provides-extras = ["dev"]

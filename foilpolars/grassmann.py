@@ -151,72 +151,6 @@ def compute_pga_basis(
     }
 
 
-def compute_pga_embedding(
-    shapes: dict[str, np.ndarray],
-) -> tuple[list[str], np.ndarray]:
-    """Project each foil's Grassmann point to 2D via Karcher mean + PGA."""
-    basis = compute_pga_basis(shapes, n_coord=2)
-    return basis["foil_ids"], basis["t"]
-
-
-def _draw_pga_embedding(
-    ax: plt.Axes,
-    t: np.ndarray,
-    title: str | None = None,
-    sampling_region: tuple[np.ndarray, np.ndarray] | None = None,
-    sampled_t: np.ndarray | None = None,
-) -> None:
-    """Scatter each foil as a point, with the sampling region behind it."""
-    # Shade the uniform sampling box (axis_min/axis_max per PGA mode)
-    # first, so foil points and labels stay on top and the overlap
-    # between each foil's position and the shared sampling region is
-    # visible
-    if sampling_region is not None:
-        axis_min, axis_max = sampling_region
-        ax.add_patch(plt.Rectangle(
-            axis_min, *(axis_max - axis_min),
-            facecolor=PERTURBED_COLOR, alpha=0.15, edgecolor=PERTURBED_COLOR,
-            linewidth=1, label="sampling region", zorder=0,
-        ))
-
-    # Sampled perturbation coordinates as small markers, drawn before
-    # the foil points so the labelled foils stay on top
-    if sampled_t is not None:
-        ax.scatter(
-            sampled_t[:, 0], sampled_t[:, 1], s=12, color=PERTURBED_COLOR,
-            alpha=0.6, zorder=1, label="sampled points",
-        )
-
-    # Plot every foil as one big star, since PGA reduces each Grassmann
-    # point (a full shape) to a single 2D coordinate and individual
-    # foil identity isn't of interest here
-    ax.scatter(
-        t[:, 0], t[:, 1], marker="*", s=200, color=BASELINE_COLOR,
-        edgecolor="k", linewidth=0.5, zorder=2, label="baseline foils",
-    )
-
-    # Square axes with labels, optional title, grid and legend
-    ax.set_box_aspect(1)
-    ax.set_xlabel("PGA coordinate 1")
-    ax.set_ylabel("PGA coordinate 2")
-    if title is not None:
-        ax.set_title(title)
-    ax.grid(True, linewidth=0.3)
-    ax.legend(fontsize=8)
-
-
-def plot_pga_embedding(
-    t: np.ndarray,
-    save_path: str | None = None,
-    title: str = "Grassmann PGA embedding (one point per foil)",
-) -> None:
-    """Scatter each foil as a single point in its 2D PGA coordinates."""
-    fig, ax = plt.subplots(figsize=(4, 4))
-    _draw_pga_embedding(ax, t, title)
-    plt.tight_layout()
-    save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
-
-
 def _draw_pga_corner(
     sampled: np.ndarray,
     labels: list[str],
@@ -582,56 +516,6 @@ def plot_grassmann_baseline_samples(
     save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
 
 
-def _draw_grassmann_perturbed(
-    ax: plt.Axes,
-    basis: dict[str, object],
-    perturbed: dict[str, np.ndarray],
-    title: str,
-) -> None:
-    """Plot every foil's baseline and the perturbed samples on the Grassmann."""
-    # All baseline foils in black, all perturbed samples (sampled around
-    # the Karcher mean) in grey, so the spread induced by perturbation is
-    # visible against the unperturbed Grassmann representations.
-    # Perturbed samples are drawn first so the black baselines stay on top
-    for j, gr_shape in enumerate(perturbed["X_gr"]):
-        ax.plot(
-            gr_shape[:, 0], gr_shape[:, 1], color=PERTURBED_COLOR,
-            linewidth=0.4, alpha=0.4, zorder=1,
-            label="perturbed" if j == 0 else None,
-        )
-    for i, desig in enumerate(basis["foil_ids"]):
-        x_gr = basis["X_gr"][i]
-        ax.plot(
-            x_gr[:, 0], x_gr[:, 1], color=BASELINE_COLOR, linewidth=0.5,
-            zorder=2, label="baseline" if i == 0 else None,
-        )
-    mu = basis["mu"]
-    ax.plot(
-        mu[:, 0], mu[:, 1], color=MEAN_COLOR, linewidth=2.5, zorder=3,
-        label="Karcher mean",
-    )
-
-    ax.set_box_aspect(1)
-    ax.set_xlabel("X_gr[:, 0]")
-    ax.set_ylabel("X_gr[:, 1]")
-    ax.set_title(title)
-    ax.legend(fontsize=8)
-    ax.grid(True, linewidth=0.3)
-
-
-def plot_grassmann_perturbed(
-    basis: dict[str, object],
-    perturbed: dict[str, np.ndarray],
-    save_path: str | None = None,
-    title: str = "Grassmann representation: baseline vs. perturbed",
-) -> None:
-    """Plot every foil's baseline and perturbed shapes on the Grassmann."""
-    fig, ax = plt.subplots(figsize=(4, 4))
-    _draw_grassmann_perturbed(ax, basis, perturbed, title)
-    plt.tight_layout()
-    save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
-
-
 def _draw_grassmann_baseline(
     ax: plt.Axes, basis: dict[str, object],
 ) -> None:
@@ -674,5 +558,3 @@ def _draw_grassmann_samples(
     ax.set_ylabel("X_gr[:, 1]")
     ax.legend(fontsize=8)
     ax.grid(True, linewidth=0.3)
-
-
