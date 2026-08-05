@@ -1,4 +1,4 @@
-# foilpolars
+# FOILPOLARS: Multifidelity Hydrofoil Polar Generation
 
 Multifidelity aerodynamic polar data generation for hydrofoil/tidal-turbine
 airfoil sections. `foilpolars` ties together three pieces:
@@ -106,8 +106,7 @@ sweeping; `grassmann` rebuilds just those artifacts on their own, and
 `plot` regenerates every figure except the per-(foil, Re, n_crit)
 comparison plots. `plot-worst-foil` reloads a saved sweep dataset and
 plots those comparison figures for the `-n` worst-converging foils.
-Output dataset and figures are written under `output/`. `submit_full_sweep.sh`
-runs the full `grassmann` → `run` → `plot` sequence as a Slurm job.
+Output dataset and figures are written under `output/`.
 
 ## License
 
@@ -115,8 +114,8 @@ BSD-3-Clause, see [LICENSE](LICENSE).
 
 ## Authors
 
-- Rimple Sandhu
-- Andrew Glaws
-- Malik Hassanaly
-- Bumseok Lee
-- Ryan King
+- Rimple Sandhu, Computational Science Center, National Laboratory of the Rockies (NLR)
+- Andrew Glaws, Computational Science Center, National Laboratory of the Rockies (NLR)
+- Malik Hassanaly, Computational Science Center, National Laboratory of the Rockies (NLR)
+- Bumseok Lee, National Wind Technology Center, National Laboratory of the Rockies (NLR)
+- Ryan King, Computational Science Center, National Laboratory of the Rockies (NLR)

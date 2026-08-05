@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import matplotlib
 import numpy as np
 import pandas as pd
@@ -86,12 +88,22 @@ def summarize_convergence(ds: xr.Dataset) -> pd.DataFrame:
     return df
 
 
-def save_full_results(ds: xr.Dataset, out_path: str) -> None:
-    """Write every (foil_id, alpha, Re, fidelity) row, no summarising."""
-    # Flatten to one row per (foil_id, alpha, Re, fidelity) and write csv
-    df = ds.to_dataframe().reset_index()
-    df.to_csv(out_path, index=False)
-    print(f"Saved {out_path}")
+def save_per_reynolds(ds: xr.Dataset, out_path: str) -> list[str]:
+    """Split ds along Re into one netcdf per value, under a per_reynolds/ dir."""
+    # Derive each slice's file name from the combined output path, e.g.
+    # data/foilpolars.nc -> data/per_reynolds/foilpolars_Re500000.nc
+    data_dir = os.path.dirname(out_path)
+    stem, ext = os.path.splitext(os.path.basename(out_path))
+    slice_dir = os.path.join(data_dir, "per_reynolds")
+    os.makedirs(slice_dir, exist_ok=True)
+
+    paths = []
+    for re in ds["Re"].values:
+        slice_path = os.path.join(slice_dir, f"{stem}_Re{int(re)}{ext}")
+        ds.sel(Re=re).to_netcdf(slice_path)
+        paths.append(slice_path)
+        print(f"Saved {slice_path}")
+    return paths
 
 
 def _boxplot_by_foil(

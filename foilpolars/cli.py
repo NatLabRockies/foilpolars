@@ -32,7 +32,7 @@ from foilpolars.postprocess import (
     plot_pga_pairs_worst,
     plot_summary,
     plot_worst_foil_shapes,
-    save_full_results,
+    save_per_reynolds,
     summarize_convergence,
 )
 from foilpolars.shapes import (
@@ -259,6 +259,16 @@ def plot_worst_foil(config_path: str, n_foils: int) -> None:
     plot_comparison_figures(ds, config, figures_dir, n_foils)
 
 
+def slice_reynolds(config_path: str) -> None:
+    """Reload a saved sweep dataset and split it into one netcdf per Re."""
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+
+    out_path = config["output"]["path"]
+    ds = xr.open_dataset(out_path)
+    save_per_reynolds(ds, out_path)
+
+
 def run(config_path: str) -> None:
     """Rebuild shape artifacts, then sweep XFoil + NeuralFoil over them."""
     with open(config_path) as f:
@@ -281,15 +291,12 @@ def run(config_path: str) -> None:
     # finishes so a killed job doesn't lose completed foils
     ds = run_full_sweep(config, shapes, checkpoint_path=out_path)
 
-    # Print the convergence/confidence summary (the full csv below already
-    # carries per-row convergence/confidence, so no separate file for it),
-    # then attach each shape's 5 varying PGA params and dump the full
-    # results table. Only the varying params go into the csv, since the
-    # shared basis added below would blow up its per-row flattening
+    # Print the convergence/confidence summary, then attach each shape's
+    # 5 varying PGA params (the netcdf below carries per-row
+    # convergence/confidence, so no separate file for it)
     print(summarize_convergence(ds))
     plot_summary(ds, fname=f"{figures_dir}/summary.png")
     ds = add_pga_columns(ds, artifacts["perturbed"])
-    save_full_results(ds, f"{data_dir}/foilpolars.csv")
 
     # Attach the shared Karcher mean / PGA basis / mean affine transform
     # needed to reconstruct each shape, then persist the combined dataset
@@ -359,6 +366,14 @@ def main() -> None:
         "-n", "--n-foils", type=int, default=DEFAULT_N_WORST_FOILS,
     )
 
+    slice_re_parser = subparsers.add_parser(
+        "slice-reynolds",
+        help="Split the saved sweep dataset into one netcdf per Re",
+    )
+    slice_re_parser.add_argument(
+        "--config", default="configs/sweep_config.yaml"
+    )
+
     args = parser.parse_args()
     if args.command == "run":
         run(args.config)
@@ -372,6 +387,8 @@ def main() -> None:
         plot(args.config)
     elif args.command == "plot-worst-foil":
         plot_worst_foil(args.config, args.n_foils)
+    elif args.command == "slice-reynolds":
+        slice_reynolds(args.config)
 
 
 if __name__ == "__main__":
