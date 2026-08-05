@@ -1,16 +1,25 @@
 # foilpolars
 
 Multifidelity aerodynamic polar data generation for hydrofoil/tidal-turbine
-airfoil sections, combining XFoil (panel method) and NeuralFoil
-(neural-network surrogate) solvers.
+airfoil sections. `foilpolars` ties together three pieces:
+
+- **[AeroSandbox](https://github.com/peterdsharpe/AeroSandbox)** supplies the
+  baseline airfoil coordinates (UIUC database).
+- **[G2Aero](https://github.com/NatLabRockies/G2Aero)** parameterizes those
+  shapes on a Grassmannian manifold (Karcher mean + PGA basis) and samples
+  new perturbed shapes around that basis.
+- **XFoil** (panel method) and **NeuralFoil** (neural-network surrogate,
+  shipped with AeroSandbox) each solve the resulting shapes for lift,
+  drag, moment, and pressure at the swept angles of attack, Reynolds
+  numbers, and `n_crit` values.
 
 ## What it does
 
-The baseline airfoils in the sweep config are loaded (optionally
-repanelled), then mapped onto a Grassmannian shape space (via G2Aero) to
-compute a Karcher mean and PGA basis. New shapes are sampled around that
-basis, and for each perturbed shape, angle of attack, Reynolds number,
-and `n_crit` in the config, both solvers are run and the results are
+The baseline airfoils in the sweep config are loaded via AeroSandbox
+(optionally repanelled), then mapped onto a Grassmannian shape space with
+G2Aero to compute a Karcher mean and PGA basis. New shapes are sampled
+around that basis, and for each perturbed shape, angle of attack, Reynolds
+number, and `n_crit` in the config, both solvers are run and the results are
 assembled into a single `xarray` dataset (`Cl`, `Cd`, `Cm`, `Cp_min`,
 convergence/confidence flags, PGA shape parameters), from which a
 cavitation-inception proxy is derived and comparison plots are written
@@ -58,6 +67,29 @@ may affect solver accuracy/convergence.
 uv sync
 ```
 
+This installs AeroSandbox, NeuralFoil, and G2Aero automatically. XFoil is
+not on PyPI and must be built separately — see below.
+
+### Installing XFoil
+
+`foilpolars` expects a compiled XFoil binary at `bin/xfoil`. XFoil is
+distributed as Fortran source by MIT; see the
+[official XFoil page](https://web.mit.edu/drela/Public/web/xfoil/) for
+background and the source download. A copy of the source
+(`xfoil6.99.tgz`) plus a `gfortran` Makefile are already included in
+`xfoil_src/`, so on a Linux box with `gfortran` you can build it with:
+
+```bash
+cd xfoil_src/Xfoil/bin
+make -f Makefile_gfortran xfoil
+cp xfoil ../../../bin/xfoil
+```
+
+If you'd rather start from a fresh download, grab the source tarball
+from the [XFoil page](https://web.mit.edu/drela/Public/web/xfoil/) and
+build it the same way. NeuralFoil-only sweeps don't need XFoil at all —
+just set the solver accordingly in the sweep config.
+
 ## Usage
 
 ```bash
@@ -77,15 +109,14 @@ plots those comparison figures for the `-n` worst-converging foils.
 Output dataset and figures are written under `output/`. `submit_full_sweep.sh`
 runs the full `grassmann` → `run` → `plot` sequence as a Slurm job.
 
-## Requirements
-
-Needs a local XFoil binary at `bin/xfoil` (not tracked in this repo —
-build it from `xfoil_src/` or your own XFoil install).
-
 ## License
 
 BSD-3-Clause, see [LICENSE](LICENSE).
 
-## Author
+## Authors
 
-Rimple Sandhu
+- Rimple Sandhu
+- Andrew Glaws
+- Malik Hassanaly
+- Bumseok Lee
+- Ryan King
