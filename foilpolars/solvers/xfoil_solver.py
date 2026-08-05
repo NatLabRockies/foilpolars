@@ -29,6 +29,14 @@ def run_xfoil(
     xtr_bot: float = 1.0,
 ) -> pd.DataFrame:
     """Run XFoil for one airfoil across alphas at one Reynolds number."""
+    # Fail with a clear message instead of a raw FileNotFoundError from
+    # subprocess if the binary hasn't been built yet (see README)
+    if not XFOIL_BIN.is_file():
+        raise RuntimeError(
+            f"XFoil binary not found at {XFOIL_BIN}; build it first "
+            "(see 'Installing XFoil' in README.md)"
+        )
+
     # Sweep outward from 0 deg in two legs: ASEQ auto-halts after 4
     # consecutive non-converged points, so starting from the well-behaved
     # region protects the sweep from an early abort

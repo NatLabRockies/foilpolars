@@ -292,7 +292,7 @@ def plot_worst_foil_shapes(
 
 def plot_pga_pairs_worst(
     ds: xr.Dataset, fname: str = "output/figures/pga_pairs_worst.png",
-    conv_threshold: float = 0.75,
+    conv_threshold: float = 0.75, min_foils: int = 3,
 ) -> None:
     """Corner plot of PGA coords + thickness ratio, foils below threshold."""
     from foilpolars.grassmann import _draw_pga_corner
@@ -304,6 +304,17 @@ def plot_pga_pairs_worst(
     xfoil_frac_all = xfoil_conv.mean(dim=("alpha", "Re", "n_crit")).values
     foil_ids = foil_ids_all[xfoil_frac_all < conv_threshold]
     n = len(foil_ids)
+
+    # Too few foils for a KDE corner plot to be meaningful (e.g. none at
+    # all when XFoil never ran, so xfoil_frac_all is all-NaN); skip
+    # instead of letting gaussian_kde fail on a near-empty sample
+    if n < min_foils:
+        print(
+            f"Skipping {fname}: only {n} foils below "
+            f"{conv_threshold:.2f} XFoil convergence (need "
+            f">= {min_foils})"
+        )
+        return
 
     # Each selected foil's PGA coefficients + thickness ratio, no baseline
     # stars since only the perturbed shapes are of interest here

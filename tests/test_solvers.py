@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+
+# Skip XFoil-dependent tests on machines without the compiled binary
+_XFOIL_BIN = (
+    Path(__file__).resolve().parents[1] / "bin" / "xfoil"
+)
+requires_xfoil = pytest.mark.skipif(
+    not _XFOIL_BIN.is_file(),
+    reason="bin/xfoil not built; see 'Installing XFoil' in README.md",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +75,7 @@ def test_neuralfoil_multiple_alphas() -> None:
 # XFoil solver tests
 # ---------------------------------------------------------------------------
 
+@requires_xfoil
 def test_xfoil_returns_expected_columns() -> None:
     from foilpolars.solvers.xfoil_solver import run_xfoil
     coords = _naca0012_coords()
@@ -72,6 +84,7 @@ def test_xfoil_returns_expected_columns() -> None:
     assert expected_cols.issubset(set(df.columns))
 
 
+@requires_xfoil
 def test_xfoil_converges_at_zero() -> None:
     from foilpolars.solvers.xfoil_solver import run_xfoil
     coords = _naca0012_coords()
@@ -82,6 +95,7 @@ def test_xfoil_converges_at_zero() -> None:
     assert np.isfinite(row["Cl"]), f"Cl should be finite; got {row['Cl']}"
 
 
+@requires_xfoil
 def test_xfoil_nonconverged_not_dropped() -> None:
     """Non-converged points must remain in the DataFrame with NaN values."""
     from foilpolars.solvers.xfoil_solver import run_xfoil

@@ -1,4 +1,4 @@
-# FOILPOLARS: Multifidelity Hydrofoil Polar Generation
+# FOILPOLARS: Grassmannian Foil Shape Sweeps for Polar Generation
 
 Multifidelity aerodynamic polar data generation for hydrofoil/tidal-turbine
 airfoil sections. `foilpolars` ties together three pieces:
@@ -73,22 +73,23 @@ not on PyPI and must be built separately — see below.
 ### Installing XFoil
 
 `foilpolars` expects a compiled XFoil binary at `bin/xfoil`. XFoil is
-distributed as Fortran source by MIT; see the
-[official XFoil page](https://web.mit.edu/drela/Public/web/xfoil/) for
-background and the source download. A copy of the source
-(`xfoil6.99.tgz`) plus a `gfortran` Makefile are already included in
-`xfoil_src/`, so on a Linux box with `gfortran` you can build it with:
+distributed as Fortran source by MIT and is not vendored in this repo
+(`xfoil_src/` and `bin/xfoil` are gitignored) — download and build it
+yourself:
 
 ```bash
-cd xfoil_src/Xfoil/bin
+mkdir -p xfoil_src && cd xfoil_src
+curl -O https://web.mit.edu/drela/Public/web/xfoil/xfoil6.99.tgz
+tar xzf xfoil6.99.tgz
+cd Xfoil/bin
 make -f Makefile_gfortran xfoil
 cp xfoil ../../../bin/xfoil
 ```
 
-If you'd rather start from a fresh download, grab the source tarball
-from the [XFoil page](https://web.mit.edu/drela/Public/web/xfoil/) and
-build it the same way. NeuralFoil-only sweeps don't need XFoil at all —
-just set the solver accordingly in the sweep config.
+This needs `gfortran` on a Linux box; see the
+[official XFoil page](https://web.mit.edu/drela/Public/web/xfoil/) for
+background if the build fails. NeuralFoil-only sweeps don't need XFoil
+at all — just set the solver accordingly in the sweep config.
 
 ## Usage
 
