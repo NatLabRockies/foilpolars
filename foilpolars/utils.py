@@ -14,7 +14,9 @@ from aerosandbox import _asb_root
 
 
 def save_or_show(
-    fig: plt.Figure, save_path: str | None = None, **savefig_kwargs: object,
+    fig: plt.Figure,
+    save_path: str | None = None,
+    **savefig_kwargs: object,
 ) -> None:
     """Save a figure to file if given a path, otherwise show it."""
     if save_path is not None:

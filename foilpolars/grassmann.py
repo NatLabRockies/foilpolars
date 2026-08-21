@@ -106,7 +106,9 @@ def load_grassmann_cache(
 
 
 def shapes_dict(
-    coords: np.ndarray, prefix: str = "p", width: int = 4,
+    coords: np.ndarray,
+    prefix: str = "p",
+    width: int = 4,
 ) -> dict[str, np.ndarray]:
     """Assign each sample in a stacked coordinate array a sequential id."""
     return {
@@ -129,7 +131,8 @@ def check_reconstruction(
 
 
 def compute_pga_basis(
-    shapes: dict[str, np.ndarray], n_coord: int = 4,
+    shapes: dict[str, np.ndarray],
+    n_coord: int = 4,
 ) -> dict[str, object]:
     """Batch-align all foils, then compute their Karcher mean + PGA basis."""
     # Stack every foil's coordinates so they can be batch-aligned together
@@ -333,8 +336,12 @@ def perturb_grassmann(
 
 
 def reconstruct_phys_shape(
-    mu: np.ndarray, vh: np.ndarray, m_mean: np.ndarray, b_mean: np.ndarray,
-    coef: np.ndarray, ratio: float,
+    mu: np.ndarray,
+    vh: np.ndarray,
+    m_mean: np.ndarray,
+    b_mean: np.ndarray,
+    coef: np.ndarray,
+    ratio: float,
 ) -> np.ndarray:
     """Rebuild one perturbed shape's (x/c, y/c) from its saved PGA params."""
     # Same exp-map + affine reconstruction as perturb_grassmann's
@@ -347,7 +354,8 @@ def reconstruct_phys_shape(
 
 
 def add_pga_columns(
-    ds: xr.Dataset, perturbed: dict[str, np.ndarray],
+    ds: xr.Dataset,
+    perturbed: dict[str, np.ndarray],
 ) -> xr.Dataset:
     """Attach each shape's PGA coefs, SVD thickness ratio and t/c_max."""
     coef = perturbed["coef"]
@@ -363,7 +371,8 @@ def add_pga_columns(
 
 
 def add_shared_basis_params(
-    ds: xr.Dataset, basis: dict[str, object],
+    ds: xr.Dataset,
+    basis: dict[str, object],
 ) -> xr.Dataset:
     """Attach the Karcher mean, PGA basis and mean affine transform."""
     m_mean = np.mean(basis["M"], axis=0)
@@ -378,7 +387,9 @@ def add_shared_basis_params(
 
 
 def _draw_physical_baseline(
-    ax: plt.Axes, shapes: dict[str, np.ndarray], karcher_phys: np.ndarray,
+    ax: plt.Axes,
+    shapes: dict[str, np.ndarray],
+    karcher_phys: np.ndarray,
 ) -> None:
     """Plot dataset foils black, with the Karcher mean bold orange on top."""
     for coords in shapes.values():
@@ -393,7 +404,9 @@ def _draw_physical_baseline(
 
 
 def _draw_physical_samples(
-    ax: plt.Axes, perturbed: dict[str, np.ndarray], karcher_phys: np.ndarray,
+    ax: plt.Axes,
+    perturbed: dict[str, np.ndarray],
+    karcher_phys: np.ndarray,
 ) -> None:
     """Plot perturbed samples as thin grey lines, with the Karcher mean."""
     samples = perturbed["phys"]
@@ -451,7 +464,8 @@ def _max_thickness(coords: np.ndarray) -> np.ndarray:
 
 
 def plot_te_thickness_histogram(
-    perturbed: dict[str, np.ndarray], save_path: str | None = None,
+    perturbed: dict[str, np.ndarray],
+    save_path: str | None = None,
     min_thickness: float = 1e-4,
 ) -> None:
     """Histogram of perturbed TE thickness (y/c), flags shapes below min."""
@@ -513,7 +527,8 @@ def plot_grassmann_baseline_samples(
 
 
 def _draw_grassmann_baseline(
-    ax: plt.Axes, basis: dict[str, object],
+    ax: plt.Axes,
+    basis: dict[str, object],
 ) -> None:
     """Plot every foil's baseline Grassmann representation on one axes."""
     # All baseline foils share one color/symbol and one legend entry,
@@ -536,7 +551,9 @@ def _draw_grassmann_baseline(
 
 
 def _draw_grassmann_samples(
-    ax: plt.Axes, perturbed: dict[str, np.ndarray], mu: np.ndarray,
+    ax: plt.Axes,
+    perturbed: dict[str, np.ndarray],
+    mu: np.ndarray,
 ) -> None:
     """Plot every perturbed sample's Grassmann representation on one axes."""
     samples = perturbed["X_gr"]

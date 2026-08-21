@@ -152,7 +152,9 @@ def run_full_sweep(
 # ---------------------------------------------------------------------------
 
 def _build_dataset(
-    coords_ds: dict, dims: tuple[str, ...], arrays: dict[str, np.ndarray],
+    coords_ds: dict,
+    dims: tuple[str, ...],
+    arrays: dict[str, np.ndarray],
 ) -> xr.Dataset:
     """Assemble the (possibly still-partial) result arrays into a Dataset."""
     ds = xr.Dataset(

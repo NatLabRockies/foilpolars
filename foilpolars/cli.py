@@ -54,7 +54,10 @@ def figures_dir_for(config: dict) -> str:
 
 
 def save_baseline_shapes(
-    config: dict, data_dir: str, figures_dir: str, plot: bool = True,
+    config: dict,
+    data_dir: str,
+    figures_dir: str,
+    plot: bool = True,
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
     """Load, repanel and save the raw + repaneled baseline foils."""
     raw_shapes = load_raw_shapes(config)
@@ -92,7 +95,9 @@ def grassmann_cache_path(data_dir: str) -> str:
 
 
 def build_grassmann_artifacts(
-    config: dict, data_dir: str, figures_dir: str,
+    config: dict,
+    data_dir: str,
+    figures_dir: str,
 ) -> dict[str, object]:
     """Rebuild the baseline/Grassmann/perturbed shape artifacts and cache."""
     # Delete-then-regenerate: the config's fixed seed always reproduces
@@ -158,7 +163,9 @@ def grassmann(config_path: str) -> None:
 
 
 def plot_comparison_figures(
-    ds: xr.Dataset, config: dict, figures_dir: str,
+    ds: xr.Dataset,
+    config: dict,
+    figures_dir: str,
     n_foils: int = DEFAULT_N_WORST_FOILS,
 ) -> None:
     """Comparison figure per (foil, Re, n_crit) for the n_foils worst foils."""
@@ -266,7 +273,9 @@ def slice_reynolds(config_path: str) -> None:
 
 
 def slice_foils(
-    config_path: str, conv_threshold: float, min_te_thickness: float,
+    config_path: str,
+    conv_threshold: float,
+    min_te_thickness: float,
 ) -> None:
     """Reload a saved sweep dataset and drop its low-quality foils."""
     with open(config_path) as f:

@@ -86,8 +86,12 @@ def _write_dat(path: Path, coords: np.ndarray) -> None:
 
 
 def _build_script(
-    re: float, n_crit: float, max_iter: int, alphas: list[float],
-    xtr_top: float = 1.0, xtr_bot: float = 1.0,
+    re: float,
+    n_crit: float,
+    max_iter: int,
+    alphas: list[float],
+    xtr_top: float = 1.0,
+    xtr_bot: float = 1.0,
 ) -> str:
     """Build an XFoil batch script: load, set up OPER, sweep, save polar."""
     # Derive the sweep range/step from the sorted alpha list
@@ -145,7 +149,9 @@ def _parse_polar(path: Path) -> pd.DataFrame:
 
 
 def _to_result(
-    polar: pd.DataFrame, alphas: list[float], re: float,
+    polar: pd.DataFrame,
+    alphas: list[float],
+    re: float,
 ) -> pd.DataFrame:
     """Reindex a parsed polar onto the requested alpha grid, flagging gaps."""
     # Index the parsed polar rows by their rounded alpha for lookup below

@@ -1,5 +1,7 @@
 # FOILPOLARS: Grassmannian Foil Shape Sweeps for Polar Generation
 
+NLR Software Record: SWR 26-095
+
 Multifidelity aerodynamic polar data generation for hydrofoil/tidal-turbine
 airfoil sections. `foilpolars` ties together three pieces:
 

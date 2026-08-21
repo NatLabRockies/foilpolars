@@ -21,7 +21,10 @@ _SWEEP_LABELS = {
 
 
 def compute_cavitation_sigma(
-    re_values: list[float], chord: float, depth: float, temperature: float,
+    re_values: list[float],
+    chord: float,
+    depth: float,
+    temperature: float,
 ) -> dict[float, float]:
     """Cavitation index sigma per Re, at a fixed chord/depth/temperature."""
     # Water density, viscosity and vapor pressure at temperature t_c,
@@ -107,7 +110,8 @@ def save_per_reynolds(ds: xr.Dataset, out_path: str) -> list[str]:
 
 
 def slice_low_quality_foils(
-    ds: xr.Dataset, conv_threshold: float = 0.75,
+    ds: xr.Dataset,
+    conv_threshold: float = 0.75,
     min_te_thickness: float = 1e-4,
 ) -> xr.Dataset:
     """Drop foils with low XFoil convergence or a too-thin trailing edge."""
@@ -156,7 +160,9 @@ def slice_low_quality_foils(
 
 
 def _boxplot_by_foil(
-    ax: plt.Axes, nf_conf: xr.DataArray, foil_ids: np.ndarray,
+    ax: plt.Axes,
+    nf_conf: xr.DataArray,
+    foil_ids: np.ndarray,
 ) -> None:
     """NeuralFoil confidence box plot, one box per foil, pooling sweep dims."""
     samples = [
@@ -174,8 +180,10 @@ def _boxplot_by_foil(
 
 
 def plot_summary(
-    ds: xr.Dataset, fname: str = "output/figures/summary.png",
-    n_worst_foils: int = 1000, conv_threshold: float = 0.75,
+    ds: xr.Dataset,
+    fname: str = "output/figures/summary.png",
+    n_worst_foils: int = 1000,
+    conv_threshold: float = 0.75,
 ) -> None:
     """XFoil convergence and NeuralFoil confidence vs sweep params + foil."""
     xfoil_conv = ds["converged"].sel(fidelity="xfoil")
@@ -280,7 +288,8 @@ def plot_summary(
 
 
 def plot_worst_foil_shapes(
-    ds: xr.Dataset, fname: str = "output/figures/worst_foil_shapes.png",
+    ds: xr.Dataset,
+    fname: str = "output/figures/worst_foil_shapes.png",
     n_worst: int = 20,
 ) -> None:
     """Plot physical (x/c, y/c) outlines of the worst-converging foils."""
@@ -337,8 +346,10 @@ def plot_worst_foil_shapes(
 
 
 def plot_pga_pairs_worst(
-    ds: xr.Dataset, fname: str = "output/figures/pga_pairs_worst.png",
-    conv_threshold: float = 0.75, min_foils: int = 3,
+    ds: xr.Dataset,
+    fname: str = "output/figures/pga_pairs_worst.png",
+    conv_threshold: float = 0.75,
+    min_foils: int = 3,
 ) -> None:
     """Corner plot of PGA coords + thickness ratio, foils below threshold."""
     from foilpolars.grassmann import _draw_pga_corner
@@ -383,8 +394,12 @@ def plot_pga_pairs_worst(
 
 
 def plot_foil_re_comparison(
-    ds: xr.Dataset, foil_id: str, re: float, sigma: float,
-    n_crit: float | None = None, figures_dir: str = "output/figures",
+    ds: xr.Dataset,
+    foil_id: str,
+    re: float,
+    sigma: float,
+    n_crit: float | None = None,
+    figures_dir: str = "output/figures",
 ) -> None:
     """One (foil, Re, n_crit) figure: XFoil points vs NeuralFoil, 3x2."""
     if n_crit is None:

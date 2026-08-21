@@ -28,7 +28,7 @@ METAFOIL_DIR = os.path.join(os.path.dirname(__file__), "metafoil_airfoils")
 _LOCAL_DIRS = [FIXES_DIR, MHK_DIR, METAFOIL_DIR]
 
 
-def _load_airfoil(desig: str) -> "asb.Airfoil":
+def _load_airfoil(desig: str) -> asb.Airfoil:
     """Build an aerosandbox Airfoil, preferring a local coordinate file."""
     import aerosandbox as asb
 
@@ -118,7 +118,8 @@ def save_shapes(
 
 
 def load_shapes(
-    path: str, columns: tuple[str, str] = ("x", "y"),
+    path: str,
+    columns: tuple[str, str] = ("x", "y"),
 ) -> dict[str, np.ndarray]:
     """Read a save_shapes netcdf back into a foil_id -> coordinates dict."""
     import xarray as xr
@@ -137,7 +138,8 @@ def load_shapes(
 
 
 def plot_shapes(
-    shapes: dict[str, np.ndarray], save_path: str | None = None,
+    shapes: dict[str, np.ndarray],
+    save_path: str | None = None,
 ) -> None:
     """Overlay all airfoil profiles on one axes, normalised to unit chord."""
     fig, ax = plt.subplots(figsize=(8, 2.7))
