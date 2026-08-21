@@ -89,7 +89,7 @@ def summarize_convergence(ds: xr.Dataset) -> pd.DataFrame:
 
 
 def save_per_reynolds(ds: xr.Dataset, out_path: str) -> list[str]:
-    """Split ds along Re into one netcdf per value, under a per_reynolds/ dir."""
+    """Split ds along Re into one netcdf per value, under per_reynolds/."""
     # Derive each slice's file name from the combined output path, e.g.
     # data/foilpolars.nc -> data/per_reynolds/foilpolars_Re500000.nc
     data_dir = os.path.dirname(out_path)
@@ -104,6 +104,55 @@ def save_per_reynolds(ds: xr.Dataset, out_path: str) -> list[str]:
         paths.append(slice_path)
         print(f"Saved {slice_path}")
     return paths
+
+
+def slice_low_quality_foils(
+    ds: xr.Dataset, conv_threshold: float = 0.75,
+    min_te_thickness: float = 1e-4,
+) -> xr.Dataset:
+    """Drop foils with low XFoil convergence or a too-thin trailing edge."""
+    from foilpolars.grassmann import _te_thickness, reconstruct_phys_shape
+
+    # XFoil convergence fraction per foil, same criterion as plot_summary's
+    # threshold line
+    xfoil_conv = ds["converged"].sel(fidelity="xfoil")
+    conv_frac = xfoil_conv.mean(dim=("alpha", "Re", "n_crit")).values
+
+    # Reconstruct each foil's physical shape from its saved PGA params to
+    # get its trailing-edge gap (not stored directly in the dataset)
+    mu = ds["mu"].values
+    vh = ds["Vh"].values
+    m_mean = ds["m_mean"].values
+    b_mean = ds["b_mean"].values
+    n_coord = sum(
+        1 for name in ds.data_vars if str(name).startswith("pga_coef_")
+    )
+    coef_all = np.column_stack([
+        ds[f"pga_coef_{j}"].values for j in range(n_coord)
+    ])
+    ratio_all = ds["thickness_ratio"].values
+    foil_ids = ds["foil_id"].values
+    te_thickness = np.array([
+        _te_thickness(
+            reconstruct_phys_shape(
+                mu, vh, m_mean, b_mean, coef_all[i], ratio_all[i],
+            )
+        )
+        for i in range(len(foil_ids))
+    ])
+
+    # Keep only foils meeting both quality criteria
+    keep = (
+        (conv_frac >= conv_threshold)
+        & (te_thickness >= min_te_thickness)
+    )
+    n_dropped = int((~keep).sum())
+    print(
+        f"Dropping {n_dropped}/{len(foil_ids)} foils "
+        f"(XFoil converged < {conv_threshold:.2f} or "
+        f"TE thickness < {min_te_thickness:.0e})"
+    )
+    return ds.sel(foil_id=foil_ids[keep])
 
 
 def _boxplot_by_foil(
@@ -126,7 +175,7 @@ def _boxplot_by_foil(
 
 def plot_summary(
     ds: xr.Dataset, fname: str = "output/figures/summary.png",
-    n_worst_foils: int = 100, conv_threshold: float = 0.75,
+    n_worst_foils: int = 1000, conv_threshold: float = 0.75,
 ) -> None:
     """XFoil convergence and NeuralFoil confidence vs sweep params + foil."""
     xfoil_conv = ds["converged"].sel(fidelity="xfoil")
@@ -135,9 +184,8 @@ def plot_summary(
     fig = plt.figure(figsize=(14, 11))
     gs = fig.add_gridspec(3, 3)
 
-    # Top row: XFoil convergence fraction and NeuralFoil confidence
-    # overlaid on the same axes, averaged over the other two sweep dims,
-    # plotted against each of alpha/Re/n_crit in turn
+    # Top row: XFoil convergence + NeuralFoil confidence overlaid,
+    # averaged over the other two sweep dims, vs alpha/Re/n_crit
     for i, dim in enumerate(_SWEEP_DIMS):
         ax = fig.add_subplot(gs[0, i])
         other_dims = [d for d in _SWEEP_DIMS if d != dim]
@@ -159,9 +207,8 @@ def plot_summary(
         if dim == "Re":
             ax.set_xscale("log")
 
-    # Rank every foil by XFoil convergence fraction and keep only the
-    # worst n_worst_foils, ascending, so the bottom two rows stay readable
-    # no matter how many perturbed shapes the sweep covers
+    # Rank foils by XFoil convergence and keep only the worst
+    # n_worst_foils, so the bottom two rows stay readable at any scale
     foil_ids_all = ds["foil_id"].values
     xfoil_frac_all = xfoil_conv.mean(dim=("alpha", "Re", "n_crit")).values
     n = min(n_worst_foils, len(foil_ids_all))
@@ -181,9 +228,8 @@ def plot_summary(
         lw=1.2, label="XFoil converged",
     )
 
-    # Threshold line, plus (if the ascending curve crosses it within
-    # the plotted subset) a vertical marker at the crossing foil and a
-    # count of how many foils in the full dataset fall below it
+    # Threshold line, plus a crossing marker (if within the plotted
+    # subset) and a count of foils in the full dataset below it
     n_below = int(np.sum(xfoil_frac_all < conv_threshold))
     ax_xfoil.axhline(
         conv_threshold, color="tab:red", linestyle="--", linewidth=1,
@@ -305,9 +351,8 @@ def plot_pga_pairs_worst(
     foil_ids = foil_ids_all[xfoil_frac_all < conv_threshold]
     n = len(foil_ids)
 
-    # Too few foils for a KDE corner plot to be meaningful (e.g. none at
-    # all when XFoil never ran, so xfoil_frac_all is all-NaN); skip
-    # instead of letting gaussian_kde fail on a near-empty sample
+    # Too few foils for a KDE corner plot (e.g. none when XFoil never
+    # ran); skip instead of letting gaussian_kde fail on a tiny sample
     if n < min_foils:
         print(
             f"Skipping {fname}: only {n} foils below "

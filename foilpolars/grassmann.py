@@ -40,16 +40,13 @@ def compute_grassmann(
 
 def save_grassmann_baseline(
     results: dict[str, dict[str, np.ndarray]],
-    out_dir: str = "output/data/foil_baseline_grass",
+    out_path: str = "output/data/foil_baseline_grass.nc",
 ) -> None:
-    """Write each foil's Grassmann coords to csv, affine transform to index."""
+    """Write each foil's Grassmann coords + affine transform to one netcdf."""
     from foilpolars.shapes import save_shapes
 
-    # Grassmann coords are (n_points, 2), same shape as physical
-    # coordinates, so they reuse the same csv/index writer. The affine
-    # transform M (2x2) and b (2,) needed to recover the physical shape
-    # from X_gr don't fit that per-point csv, so they ride along as
-    # extra index columns instead of a second per-foil file
+    # Grassmann coords reuse the physical-shape netcdf writer; M/b (the
+    # affine transform back to physical coords) ride along as extras
     x_gr = {desig: r["X_gr"] for desig, r in results.items()}
     extra_columns = {
         desig: dict(zip(
@@ -59,7 +56,7 @@ def save_grassmann_baseline(
         for desig, r in results.items()
     }
     save_shapes(
-        x_gr, out_dir=out_dir, header="Xgr_0,Xgr_1",
+        x_gr, out_path=out_path, columns=("Xgr_0", "Xgr_1"),
         extra_columns=extra_columns,
     )
 
@@ -161,9 +158,8 @@ def _draw_pga_corner(
     n_param = len(labels)
     grid_size = 60
 
-    # Staircase (corner) layout: diagonal holds each parameter's
-    # marginal distribution, lower triangle holds pairwise KDE density
-    # contours, upper triangle is left blank
+    # Staircase (corner) layout: diagonal holds marginal histograms,
+    # lower triangle holds pairwise KDE contours, upper triangle blank
     fig, axes = plt.subplots(
         n_param, n_param, figsize=(1.8 * n_param, 1.8 * n_param),
     )
@@ -181,9 +177,8 @@ def _draw_pga_corner(
                 )
                 ax.set_yticks([])
             else:
-                # Gaussian KDE evaluated on a regular grid, then drawn as
-                # filled contours so the sample cloud reads as a smooth
-                # density surface instead of individual points
+                # Gaussian KDE on a grid, drawn as filled contours so
+                # the sample cloud reads as a smooth density surface
                 x, y = sampled[:, j], sampled[:, i]
                 kde = gaussian_kde(np.vstack([x, y]))
                 xi = np.linspace(x.min(), x.max(), grid_size)
@@ -209,9 +204,8 @@ def _draw_pga_corner(
             else:
                 ax.set_yticklabels([])
 
-    # Place the baseline legend and a density colorbar inside the blank
-    # upper-right triangle instead of outside the axes grid, so no extra
-    # top/right margin is added
+    # Baseline legend and density colorbar go inside the blank
+    # upper-right triangle instead of outside the axes grid
     if baseline is not None:
         handles, legend_labels = axes[1, 0].get_legend_handles_labels()
         axes[0, n_param - 1].legend(
@@ -239,10 +233,8 @@ def plot_pga_pairs(
     t = basis["t"]
     n_coord = t.shape[1]
 
-    # Thickness ratio is the 5th parameter, computed the same way as
-    # in perturb_grassmann: each foil's affine transform M has two
-    # singular values (chord-wise, thickness-wise); their ratio is the
-    # baseline's counterpart to the sampled thickness_ratio
+    # Thickness ratio (5th param) is the baseline's counterpart to
+    # thickness_ratio: ratio of M's two singular values (chord, thickness)
     singular_values = np.linalg.svd(basis["M"], compute_uv=False)
     baseline_ratio = singular_values[:, 1] / singular_values[:, 0]
     baseline = np.column_stack([t, baseline_ratio])
@@ -257,9 +249,8 @@ def plot_pga_pairs(
 
 def _normalize_le_te(phys: np.ndarray) -> np.ndarray:
     """Translate/rotate/scale so the LE is at (0, 0) and TE at (1, 0)."""
-    # Trailing edge is the midpoint of the first/last (upper/lower TE)
-    # points; leading edge is the point farthest from it, matching
-    # aerosandbox's Airfoil.normalize()
+    # TE is the midpoint of the first/last points; LE is the point
+    # farthest from it, matching aerosandbox's Airfoil.normalize()
     x_te, y_te = np.mean(phys[[0, -1]], axis=0)
     dist_to_te = np.hypot(phys[:, 0] - x_te, phys[:, 1] - y_te)
     le_index = np.argmax(dist_to_te)
@@ -280,11 +271,8 @@ def _normalize_le_te(phys: np.ndarray) -> np.ndarray:
 
 def _snap_te_to_chord(phys: np.ndarray) -> np.ndarray:
     """Slide each TE surface point to x/c = 1 along its own local slope."""
-    # The rotation above only pins the TE midpoint to (1, 0), leaving
-    # the individual upper/lower TE points straddling x/c = 1 (worse
-    # for a blunt TE). Extend/trim each surface along the line through
-    # its last two near-TE points instead, so both land exactly on
-    # x/c = 1 without disturbing the rest of the shape or its slope
+    # Rotation only pins the TE midpoint, leaving upper/lower TE points
+    # straddling x/c=1; extend/trim each along its last two TE points
     out = phys.copy()
     for te_idx, next_idx in ((0, 1), (-1, -2)):
         x0, y0 = phys[te_idx]
@@ -305,33 +293,20 @@ def perturb_grassmann(
     mu, vh, t = basis["mu"], basis["Vh"], basis["t"]
     m_mean, b_mean = np.mean(basis["M"], axis=0), np.mean(basis["b"], axis=0)
 
-    # Each foil's affine transform M scales the unit-covariance
-    # Grassmann shape by two singular values: a larger one along the
-    # chord and a smaller one along the thickness. Their ratio is a
-    # thickness/aspect-ratio parameter that compute_pga_basis's mean-M
-    # reconstruction was discarding, so sample it alongside the PGA
-    # coordinates instead of treating shape and thickness as separate
-    # stages
+    # M's chord/thickness singular-value ratio (dropped by compute_pga_basis's
+    # mean-M) is sampled alongside the PGA coordinates, not a separate stage
     singular_values = np.linalg.svd(basis["M"], compute_uv=False)
     ratio_min = np.min(singular_values[:, 1] / singular_values[:, 0])
     ratio_max = np.max(singular_values[:, 1] / singular_values[:, 0])
     u_mean, d_mean, vh_mean = np.linalg.svd(m_mean)
 
-    # Bound one joint 5-D box: the 4 PGA coordinates (each uniform
-    # within the full dataset's per-mode range, matching g2aero's
-    # Grassmann_PGAspace.sample_coef) plus the thickness ratio, so
-    # every perturbation draws all 5 parameters at once
+    # One joint 5-D box: 4 PGA coords (per-mode range, matching
+    # g2aero's sample_coef) plus thickness ratio, drawn together
     axis_min = np.append(np.min(t, axis=0), ratio_min)
     axis_max = np.append(np.max(t, axis=0), ratio_max)
 
-    # Exp-map each sampled coordinate from the Karcher mean back onto
-    # the Grassmann manifold, then onto x/y via the mean affine
-    # transform with the sampled thickness ratio. The reconstructed
-    # shape is renormalized (LE at (0, 0), TE at (1, 0), unit chord)
-    # afterward, since rescaling the thickness singular value alone
-    # can shift/rotate the reconstructed chord extent and leave the
-    # LE/TE off the y/c = 0 line. Resample on self-intersection,
-    # matching g2aero's generate_perturbed_shapes
+    # Exp-map to the manifold, then to x/y via the mean affine transform;
+    # renormalize LE/TE and resample on self-intersection, as g2aero does
     gr_shapes = np.empty((n_perturb, mu.shape[0], 2))
     coords = np.empty((n_perturb, mu.shape[0], 2))
     coefs = np.empty((n_perturb, t.shape[1]))
@@ -362,9 +337,8 @@ def reconstruct_phys_shape(
     coef: np.ndarray, ratio: float,
 ) -> np.ndarray:
     """Rebuild one perturbed shape's (x/c, y/c) from its saved PGA params."""
-    # Same exp-map + affine reconstruction as perturb_grassmann's sampling
-    # step, replayed for a single (coef, ratio) pair pulled back out of a
-    # saved dataset instead of a fresh random draw
+    # Same exp-map + affine reconstruction as perturb_grassmann's
+    # sampling step, replayed for one saved (coef, ratio) pair
     u_mean, d_mean, vh_mean = np.linalg.svd(m_mean)
     m_sample = u_mean @ np.diag([d_mean[0], d_mean[0] * ratio]) @ vh_mean
     gr_shape = perturb_gr_shape(vh, mu, coef)
@@ -450,9 +424,8 @@ def plot_perturbed_shapes(
     b_mean = np.mean(basis["b"], axis=0)
     karcher_phys = basis["mu"] @ m_mean + b_mean
 
-    # Physical (x/c, y/c) baseline foils, then perturbed samples, each
-    # spanning the full row width with a true (equal) aspect ratio so
-    # the thin foil profiles are shown at their real proportions
+    # Baseline row, then perturbed row, each full-width with a true
+    # (equal) aspect ratio so the thin foil profiles read correctly
     _draw_physical_baseline(axes[0], shapes, karcher_phys)
     _draw_physical_samples(axes[1], perturbed, karcher_phys)
     for ax in axes:
@@ -479,8 +452,9 @@ def _max_thickness(coords: np.ndarray) -> np.ndarray:
 
 def plot_te_thickness_histogram(
     perturbed: dict[str, np.ndarray], save_path: str | None = None,
+    min_thickness: float = 1e-4,
 ) -> None:
-    """Histogram of perturbed trailing-edge thickness (y/c)."""
+    """Histogram of perturbed TE thickness (y/c), flags shapes below min."""
     # Trailing edge thickness per perturbed sample, in physical
     # (x/c, y/c) coordinates
     perturbed_te = _te_thickness(perturbed["phys"])
@@ -497,6 +471,28 @@ def plot_te_thickness_histogram(
     ax.set_xlabel("trailing-edge thickness (y/c)")
     ax.set_ylabel("count")
     ax.grid(True, linewidth=0.3)
+
+    # Min-thickness line, plus a count/id readout of foils under it
+    # (same p#### ids `shapes_dict` assigns this array in the sweep)
+    below = np.nonzero(perturbed_te < min_thickness)[0]
+    foil_ids = list(shapes_dict(perturbed["phys"]).keys())
+    below_ids = [foil_ids[i] for i in below]
+    ax.axvline(
+        min_thickness, color="tab:red", linestyle="--", linewidth=1,
+        label=f"min allowed = {min_thickness:.0e}",
+    )
+    ax.text(
+        0.01, 0.92,
+        f"{len(below)}/{len(perturbed_te)} foils below "
+        f"{min_thickness:.0e}",
+        transform=ax.transAxes, fontsize=8, color="tab:red",
+    )
+    ax.legend(fontsize=8)
+    if below_ids:
+        print(
+            f"{len(below_ids)} foils below {min_thickness:.0e} TE "
+            f"thickness: {', '.join(below_ids)}"
+        )
     save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
 
 

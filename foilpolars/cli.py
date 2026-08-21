@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 
 import numpy as np
 import xarray as xr
@@ -33,6 +32,7 @@ from foilpolars.postprocess import (
     plot_summary,
     plot_worst_foil_shapes,
     save_per_reynolds,
+    slice_low_quality_foils,
     summarize_convergence,
 )
 from foilpolars.shapes import (
@@ -58,11 +58,11 @@ def save_baseline_shapes(
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
     """Load, repanel and save the raw + repaneled baseline foils."""
     raw_shapes = load_raw_shapes(config)
-    save_shapes(raw_shapes, out_dir=f"{data_dir}/foil_baseline")
+    save_shapes(raw_shapes, out_path=f"{data_dir}/foil_baseline.nc")
 
     repaneled_shapes = load_all_shapes(config)
     save_shapes(
-        repaneled_shapes, out_dir=f"{data_dir}/foil_baseline_repanel",
+        repaneled_shapes, out_path=f"{data_dir}/foil_baseline_repanel.nc",
     )
     if plot:
         plot_shapes(
@@ -81,8 +81,8 @@ def get_foils(config_path: str) -> None:
     save_baseline_shapes(config, data_dir, figures_dir)
 
 
-GRASSMANN_OWNED_DIRS = [
-    "foil_baseline_grass", "foil_perturbed", "foil_perturbed_grass",
+GRASSMANN_OWNED_FILES = [
+    "foil_baseline_grass.nc", "foil_perturbed.nc", "foil_perturbed_grass.nc",
 ]
 
 
@@ -95,11 +95,13 @@ def build_grassmann_artifacts(
     config: dict, data_dir: str, figures_dir: str,
 ) -> dict[str, object]:
     """Rebuild the baseline/Grassmann/perturbed shape artifacts and cache."""
-    # Delete-then-regenerate: with the config's fixed seed this always
-    # reproduces the same files, so stale foils from a previous config
-    # never linger and reruns are exactly reproducible
-    for name in GRASSMANN_OWNED_DIRS:
-        shutil.rmtree(f"{data_dir}/{name}", ignore_errors=True)
+    # Delete-then-regenerate: the config's fixed seed always reproduces
+    # the same files, so no stale file lingers and reruns match exactly
+    for name in GRASSMANN_OWNED_FILES:
+        try:
+            os.remove(f"{data_dir}/{name}")
+        except FileNotFoundError:
+            pass
 
     raw_shapes, repaneled_shapes = save_baseline_shapes(
         config, data_dir, figures_dir, plot=False,
@@ -109,13 +111,11 @@ def build_grassmann_artifacts(
     grassmann_results = compute_grassmann(raw_shapes)
     check_reconstruction(raw_shapes, grassmann_results)
     save_grassmann_baseline(
-        grassmann_results, out_dir=f"{data_dir}/foil_baseline_grass",
+        grassmann_results, out_path=f"{data_dir}/foil_baseline_grass.nc",
     )
 
-    # PGA needs equal landmark counts, so use repaneled shapes. Use
-    # r=4 principal geodesic modes, matching the eigenvalue-decay
-    # truncation used in the Grassmannian airfoil paper (Doronina
-    # et al. 2022) for perturbing shapes
+    # PGA needs equal landmark counts, so use repaneled shapes with
+    # r=4 modes, matching Doronina et al. 2022's eigenvalue-decay cutoff
     basis = compute_pga_basis(repaneled_shapes, n_coord=4)
     grassmann_config = config.get("grassmann", {})
     perturbed = perturb_grassmann(
@@ -124,15 +124,14 @@ def build_grassmann_artifacts(
         seed=grassmann_config.get("seed"),
     )
 
-    # Physical and Grassmann-space coordinates of the same perturbed
-    # samples, saved to separate directories so neither format is
-    # ambiguous about which space its coordinates live in
+    # Physical and Grassmann-space coords of the same perturbed samples,
+    # saved separately so neither file is ambiguous about its space
     phys_shapes = shapes_dict(perturbed["phys"])
-    save_shapes(phys_shapes, out_dir=f"{data_dir}/foil_perturbed")
+    save_shapes(phys_shapes, out_path=f"{data_dir}/foil_perturbed.nc")
     grass_shapes = shapes_dict(perturbed["X_gr"])
     save_shapes(
-        grass_shapes, out_dir=f"{data_dir}/foil_perturbed_grass",
-        header="Xgr_0,Xgr_1",
+        grass_shapes, out_path=f"{data_dir}/foil_perturbed_grass.nc",
+        columns=("Xgr_0", "Xgr_1"),
     )
 
     # Cache everything `plot` needs to redraw the Grassmann figures
@@ -228,11 +227,8 @@ def plot(config_path: str) -> None:
     data_dir = os.path.dirname(out_path)
     figures_dir = figures_dir_for(config)
 
-    # Grassmann figures need only the `grassmann` command's cache; sweep
-    # figures need a saved sweep dataset from `run`. Either, both or
-    # neither may exist depending on which commands have been run. The
-    # per-(foil, Re, n_crit) comparison figures are the expensive part
-    # of a full replot, so they're left to `plot-worst-foil` instead
+    # Grassmann figures need `grassmann`'s cache; sweep figures need
+    # `run`'s dataset. Per-foil comparisons are left to `plot-worst-foil`
     cache_path = grassmann_cache_path(data_dir)
     if os.path.exists(cache_path):
         plot_grassmann_figures(data_dir, figures_dir)
@@ -269,6 +265,23 @@ def slice_reynolds(config_path: str) -> None:
     save_per_reynolds(ds, out_path)
 
 
+def slice_foils(
+    config_path: str, conv_threshold: float, min_te_thickness: float,
+) -> None:
+    """Reload a saved sweep dataset and drop its low-quality foils."""
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+
+    out_path = config["output"]["path"]
+    stem, ext = os.path.splitext(out_path)
+    sliced_path = f"{stem}_sliced{ext}"
+
+    ds = xr.open_dataset(out_path)
+    sliced = slice_low_quality_foils(ds, conv_threshold, min_te_thickness)
+    sliced.to_netcdf(sliced_path)
+    print(f"Saved {sliced_path}")
+
+
 def run(config_path: str) -> None:
     """Rebuild shape artifacts, then sweep XFoil + NeuralFoil over them."""
     with open(config_path) as f:
@@ -279,28 +292,24 @@ def run(config_path: str) -> None:
     figures_dir = figures_dir_for(config)
     os.makedirs(data_dir, exist_ok=True)
 
-    # Same baseline/Grassmann/perturbed-shape pipeline as the `grassmann`
-    # command — the sweep runs over its perturbed shapes, not the
-    # baseline foils directly
+    # Same pipeline as `grassmann` — the sweep runs over its perturbed
+    # shapes, not the baseline foils directly
     artifacts = build_grassmann_artifacts(config, data_dir, figures_dir)
     shapes = artifacts["foil_perturbed"]
     plot_grassmann_figures(data_dir, figures_dir)
 
-    # Run both solvers over every (perturbed shape, alpha, Re) combination,
-    # checkpointing the raw results to the output nc path after each foil
-    # finishes so a killed job doesn't lose completed foils
+    # Both solvers over every (shape, alpha, Re) combination, checkpointed
+    # to out_path after each foil so a killed job keeps completed ones
     ds = run_full_sweep(config, shapes, checkpoint_path=out_path)
 
-    # Print the convergence/confidence summary, then attach each shape's
-    # 5 varying PGA params (the netcdf below carries per-row
-    # convergence/confidence, so no separate file for it)
+    # Print convergence/confidence summary, then attach each shape's 5
+    # PGA params (the netcdf below already carries per-row values)
     print(summarize_convergence(ds))
     plot_summary(ds, fname=f"{figures_dir}/summary.png")
     ds = add_pga_columns(ds, artifacts["perturbed"])
 
-    # Attach the shared Karcher mean / PGA basis / mean affine transform
-    # needed to reconstruct each shape, then persist the combined dataset
-    # of polars + shape-reconstruction params
+    # Attach the shared Karcher mean/PGA basis/affine transform needed
+    # to reconstruct each shape, then persist polars + those params
     ds = add_shared_basis_params(ds, artifacts["basis"])
     ds.to_netcdf(out_path)
     print(f"Saved {out_path}")
@@ -312,10 +321,8 @@ def run(config_path: str) -> None:
         ds, fname=f"{figures_dir}/pga_pairs_worst.png",
     )
 
-    # One comparison figure per (foil, Re, n_crit), at the fixed
-    # cavitation chord/depth/temperature. Skipped when n_perturb is large,
-    # since one figure per perturbed shape per Re/n_crit would otherwise
-    # number in the tens of thousands
+    # One figure per (foil, Re, n_crit) at fixed chord/depth/temperature;
+    # capped at DEFAULT_N_WORST_FOILS or it'd number in the tens of thousands
     plot_comparison_figures(ds, config, figures_dir, DEFAULT_N_WORST_FOILS)
 
 
@@ -374,6 +381,20 @@ def main() -> None:
         "--config", default="configs/sweep_config.yaml"
     )
 
+    slice_foils_parser = subparsers.add_parser(
+        "slice-foils",
+        help="Drop foils with low XFoil convergence or a thin TE gap",
+    )
+    slice_foils_parser.add_argument(
+        "--config", default="configs/sweep_config.yaml"
+    )
+    slice_foils_parser.add_argument(
+        "--conv-threshold", type=float, default=0.75,
+    )
+    slice_foils_parser.add_argument(
+        "--min-te-thickness", type=float, default=1e-4,
+    )
+
     args = parser.parse_args()
     if args.command == "run":
         run(args.config)
@@ -389,6 +410,10 @@ def main() -> None:
         plot_worst_foil(args.config, args.n_foils)
     elif args.command == "slice-reynolds":
         slice_reynolds(args.config)
+    elif args.command == "slice-foils":
+        slice_foils(
+            args.config, args.conv_threshold, args.min_te_thickness,
+        )
 
 
 if __name__ == "__main__":

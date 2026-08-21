@@ -15,17 +15,30 @@ if TYPE_CHECKING:
 
 FIXES_DIR = os.path.join(os.path.dirname(__file__), "airfoil_fixes")
 
+# Sandia's MHKF1 hydrofoil family, not in AeroSandbox's UIUC-backed
+# database; vendored from github.com/codykarcher/metafoil (MIT licensed)
+MHK_DIR = os.path.join(os.path.dirname(__file__), "mhk_airfoils")
+
+# Rest of metafoil's raw_airfoil_files database (~6.5k airfoils, same
+# source/license as MHK_DIR), vendored so its designations resolve too
+METAFOIL_DIR = os.path.join(os.path.dirname(__file__), "metafoil_airfoils")
+
+# Local coordinate directories checked before falling back to AeroSandbox's
+# UIUC lookup, in priority order
+_LOCAL_DIRS = [FIXES_DIR, MHK_DIR, METAFOIL_DIR]
+
 
 def _load_airfoil(desig: str) -> "asb.Airfoil":
-    """Build an aerosandbox Airfoil, preferring a local coordinate fix."""
+    """Build an aerosandbox Airfoil, preferring a local coordinate file."""
     import aerosandbox as asb
 
-    # Some UIUC entries (e.g. naca633218) are known to be wrong; a
-    # corrected coordinate file overrides the bundled database if present
-    fix_path = os.path.join(FIXES_DIR, f"{desig}.dat")
-    if os.path.exists(fix_path):
-        coordinates = np.loadtxt(fix_path)
-        return asb.Airfoil(name=desig, coordinates=coordinates)
+    # Some designations aren't in (or are known wrong in) AeroSandbox's
+    # UIUC-backed database; a local coordinate file overrides/supplies it
+    for local_dir in _LOCAL_DIRS:
+        local_path = os.path.join(local_dir, f"{desig}.dat")
+        if os.path.exists(local_path):
+            coordinates = np.loadtxt(local_path)
+            return asb.Airfoil(name=desig, coordinates=coordinates)
 
     return asb.Airfoil(desig)
 
@@ -62,40 +75,65 @@ def load_raw_shapes(config: dict) -> dict[str, np.ndarray]:
 
 def save_shapes(
     shapes: dict[str, np.ndarray],
-    out_dir: str = "output/data/shapes",
-    header: str = "x/c,y/c",
+    out_path: str = "output/data/shapes.nc",
+    columns: tuple[str, str] = ("x", "y"),
     extra_columns: dict[str, dict[str, object]] | None = None,
 ) -> None:
-    """Write each foil's 2-column coordinates to its own csv, plus an index."""
-    os.makedirs(out_dir, exist_ok=True)
+    """Write every foil's coordinates + metadata to one netcdf file."""
+    import xarray as xr
+
+    # netCDF forbids "/" in variable names, so chord-normalized x/c, y/c
+    # coordinates are stored as plain "x", "y" by default
     foil_ids = list(shapes.keys())
+    n_points = np.array([shapes[fid].shape[0] for fid in foil_ids])
 
-    # One coordinate file per foil, named after its id
-    for foil_id in foil_ids:
-        path = os.path.join(out_dir, f"{foil_id}.csv")
-        np.savetxt(
-            path, shapes[foil_id], fmt="%.6f", delimiter=",",
-            header=header, comments="",
+    # Foils can have different point counts (e.g. raw UIUC tables), so
+    # pad to the longest with NaN; n_points records true length for reload
+    max_n = int(n_points.max())
+    coords = np.full((len(foil_ids), max_n, 2), np.nan)
+    for i, foil_id in enumerate(foil_ids):
+        pts = shapes[foil_id]
+        coords[i, :pts.shape[0], :] = pts
+
+    data_vars = {
+        columns[0]: (("foil_id", "point"), coords[:, :, 0]),
+        columns[1]: (("foil_id", "point"), coords[:, :, 1]),
+        "n_points": (("foil_id",), n_points),
+    }
+
+    # Caller-supplied per-foil metadata (e.g. affine transform, PGA
+    # coords) merged in as extra data variables
+    if extra_columns is not None:
+        extra_names = list(next(iter(extra_columns.values())).keys())
+        for name in extra_names:
+            data_vars[name] = (
+                ("foil_id",),
+                [extra_columns[fid][name] for fid in foil_ids],
+            )
+
+    ds = xr.Dataset(data_vars, coords={"foil_id": foil_ids})
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    ds.to_netcdf(out_path)
+    print(f"Saved {len(foil_ids)} shapes to {out_path}")
+
+
+def load_shapes(
+    path: str, columns: tuple[str, str] = ("x", "y"),
+) -> dict[str, np.ndarray]:
+    """Read a save_shapes netcdf back into a foil_id -> coordinates dict."""
+    import xarray as xr
+
+    ds = xr.load_dataset(path)
+    shapes: dict[str, np.ndarray] = {}
+
+    # Trim each foil's NaN padding back off using its stored n_points
+    for foil_id in ds["foil_id"].values:
+        n = int(ds["n_points"].sel(foil_id=foil_id).item())
+        row = ds.sel(foil_id=foil_id)
+        shapes[str(foil_id)] = np.column_stack(
+            [row[columns[0]].values[:n], row[columns[1]].values[:n]],
         )
-
-    # Index file mapping each foil id to its coordinate file, plus any
-    # caller-supplied per-foil metadata (e.g. affine transform, PGA
-    # coords) merged in as extra columns
-    extra_names = list(next(iter(extra_columns.values())).keys()) \
-        if extra_columns else []
-    index_path = os.path.join(out_dir, "index.csv")
-    with open(index_path, "w") as f:
-        f.write(",".join(["foil_id", "n_points", "file", *extra_names]))
-        f.write("\n")
-        for foil_id in foil_ids:
-            n_points = shapes[foil_id].shape[0]
-            row = [foil_id, n_points, f"{foil_id}.csv"]
-            if extra_columns is not None:
-                row += [extra_columns[foil_id][name] for name in extra_names]
-            f.write(",".join(str(v) for v in row))
-            f.write("\n")
-    print(f"Saved {len(foil_ids)} shape files to {out_dir}")
-    print(f"Saved {index_path}")
+    return shapes
 
 
 def plot_shapes(
