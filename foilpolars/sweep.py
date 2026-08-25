@@ -9,6 +9,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 import xarray as xr
+from tqdm import tqdm
 
 from foilpolars.solvers.neuralfoil_solver import run_neuralfoil
 from foilpolars.solvers.xfoil_solver import run_xfoil
@@ -33,9 +34,10 @@ def run_full_sweep(
     checkpoint_every: int = 250,
 ) -> xr.Dataset:
     """Run the sweep parallelized across foils, checkpointing every N."""
+    print("[run_full_sweep] starting")
     foil_ids = list(shapes.keys())
 
-    op_cfg = config["operating"]
+    op_cfg = config["sweep"]
     alpha_cfg = op_cfg["alpha"]
     alphas = [
         float(a)
@@ -109,6 +111,10 @@ def run_full_sweep(
     # independent (Re, n_crit, fidelity, alpha) sub-sweeps for different
     # shapes execute concurrently instead of one giant serial loop
     max_workers = min(len(foil_ids), os.cpu_count() or 1)
+    print(
+        f"[run_full_sweep] dispatching {len(foil_ids)} foils across "
+        f"{max_workers} workers"
+    )
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = {
             pool.submit(
@@ -124,7 +130,11 @@ def run_full_sweep(
         # most completed foils on disk instead of only the final,
         # all-or-nothing save, without rewriting the whole file each time
         n_done = 0
-        for future in as_completed(futures):
+        progress = tqdm(
+            as_completed(futures), total=len(foil_ids),
+            desc="[run_full_sweep] foils",
+        )
+        for future in progress:
             fi = futures[future]
             cl, cd, cm, cpmin, conv, conf = future.result()
             cl_arr[fi] = cl
@@ -141,8 +151,10 @@ def run_full_sweep(
                 _build_dataset(coords_ds, dims, arrays).to_netcdf(
                     checkpoint_path
                 )
-                print(f"Checkpointed {n_done}/{len(foil_ids)} foils "
-                      f"to {checkpoint_path}")
+                tqdm.write(
+                    f"Checkpointed {n_done}/{len(foil_ids)} foils "
+                    f"to {checkpoint_path}"
+                )
 
     return _build_dataset(coords_ds, dims, arrays)
 
@@ -200,13 +212,6 @@ def _sweep_one_foil(
             xtr_top, xtr_bot = forced_by_ncrit.get(n_crit, (1.0, 1.0))
             solver_n_crit = 9.0 if forced else n_crit
             for fidi, fidelity in enumerate(fidelities):
-                print(
-                    f"  Running: foil={foil_id}  Re={re:.2e}  "
-                    f"n_crit={n_crit:g}  fidelity={fidelity}"
-                    + (
-                        f"  xtr=({xtr_top:g}, {xtr_bot:g})" if forced else ""
-                    )
-                )
                 df = _run_solver(
                     fidelity, coords, alphas, re, solver_n_crit,
                     solvers_cfg, xtr_top, xtr_bot,

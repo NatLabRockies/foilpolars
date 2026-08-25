@@ -7,6 +7,5 @@ xfoil_src/
 bin/xfoil
 *.csv
 output/*
-!output/summary_report.pdf
 logs/
 submit_full_sweep.sh

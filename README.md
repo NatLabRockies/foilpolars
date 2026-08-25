@@ -29,13 +29,10 @@ per shape/Re/`n_crit`.
 
 ## Repanelling
 
-By default each airfoil is repanelled to `n_points_per_side` points per
-side (~2x total, default 100/side = 199 points) before being passed to
-the solvers. Set
-`repanel.enabled: false` in the config to use the raw UIUC coordinates
-unchanged instead — both XFoil and NeuralFoil accept arbitrary coordinate
-arrays, so this is safe, but irregular point spacing in the raw tables
-may affect solver accuracy/convergence.
+Each airfoil is repanelled to `grassmann.n_repanel_points_per_side`
+points per side (~2x total, default 100/side = 199 points) before being
+mapped onto the Grassmannian; PGA needs equal landmark counts across
+foils, so repanelling can't be disabled.
 
 ## Installation
 
@@ -55,6 +52,21 @@ uv sync
 
 This installs AeroSandbox, NeuralFoil, and G2Aero automatically. XFoil is
 not on PyPI and must be built separately — see below.
+
+`uv sync` creates the environment at `.venv/` but doesn't activate it.
+Either activate it once per shell:
+
+```bash
+source .venv/bin/activate
+foilpolars sweep --config configs/config.yaml
+```
+
+or prefix each command with `uv run` (no activation needed, `run.sh`
+below uses this form):
+
+```bash
+uv run foilpolars sweep --config configs/config.yaml
+```
 
 ### Installing XFoil
 
@@ -79,40 +91,73 @@ background if the build fails.
 
 ## Usage
 
-All commands take `--config configs/sweep_config.yaml` (or another
+All commands take `--config configs/config.yaml` (or another
 config path); output dataset and figures are written under `output/`.
 
 ```bash
-foilpolars list-foils
-foilpolars get-foils --config configs/sweep_config.yaml
-foilpolars grassmann --config configs/sweep_config.yaml
-foilpolars run --config configs/sweep_config.yaml
-foilpolars plot --config configs/sweep_config.yaml
-foilpolars plot-worst-foil --config configs/sweep_config.yaml -n 5
-foilpolars slice-reynolds --config configs/sweep_config.yaml
-foilpolars slice-foils --config configs/sweep_config.yaml
+foilpolars baseline --config configs/config.yaml
+foilpolars grassmann --config configs/config.yaml
+foilpolars sweep --config configs/config.yaml
+foilpolars plot --config configs/config.yaml -n 5
+foilpolars save --config configs/config.yaml
 ```
 
-- `list-foils` — lists the airfoils available in the AeroSandbox/
-  NeuralFoil training database.
-- `get-foils` — loads, repanels, saves, and plots the baseline foils
+- `baseline` — loads, repanels, saves, and plots the `baseline` foils
   named in the config.
 - `grassmann` — maps the baseline foils onto a Grassmannian shape
   space (Karcher mean + PGA basis) and samples the perturbed shapes,
   caching the result.
-- `run` — rebuilds the Grassmann/perturbed-shape artifacts, then runs
-  the full XFoil + NeuralFoil sweep over shape/alpha/Re/`n_crit` and
-  plots the resulting figures.
-- `plot` — regenerates every figure from a saved sweep dataset except
-  the per-(foil, Re, n_crit) comparison plots.
-- `plot-worst-foil` — reloads a saved sweep dataset and plots
-  per-(foil, Re, n_crit) comparisons for the `-n` worst-converging
-  foils.
-- `slice-reynolds` — splits the saved sweep dataset into one netcdf
-  file per Reynolds number.
-- `slice-foils` — drops foils with low XFoil convergence or a
-  trailing-edge gap thinner than `--min-te-thickness` from the sweep
-  dataset.
+- `sweep` — rebuilds the Grassmann/perturbed-shape artifacts, runs the
+  full XFoil + NeuralFoil sweep over shape/alpha/Re/`n_crit`, saves
+  the dataset, then calls `plot`.
+- `plot` — regenerates every figure from whatever saved data/cache
+  exists, including per-(foil, Re, n_crit) comparisons for the `-n`
+  worst-converging foils.
+- `save` — drops whole foils below `postprocess.min_xfoil_conv`,
+  `min_te_thickness`, or `min_thickness`, then marks every remaining
+  (foil, alpha, Re, n_crit) point untrusted — via a shared `converged`
+  flag on both fidelities — unless XFoil converged there *and*
+  NeuralFoil's confidence meets `min_neuralfoil_confidence`; writes
+  `{stem}_clean.nc` beside the sweep dataset.
+
+## Running the full pipeline
+
+`run.sh` chains `sweep` then `save` for one config, selected by an
+optional tag (no tag = `configs/config.yaml`):
+
+```bash
+./run.sh          # configs/config.yaml
+./run.sh small    # configs/config_small.yaml
+./run.sh mhk      # configs/config_mhk.yaml
+```
+
+### Submitting to Kestrel
+
+`submit_to_kestrel.sh` is a Slurm batch script that calls `run.sh`
+inside the `ai4wind` allocation. Submit it with `sbatch`, passing the
+same tag `run.sh` takes and a `--time` sized to that config (`sweep`'s
+cost scales with `grassmann.n_perturb`, noted in each config's
+trailing comment):
+
+```bash
+sbatch --time=36:00:00 --job-name=foilpolars-full \
+  --output=logs/full_%j.out --error=logs/full_%j.err \
+  submit_to_kestrel.sh
+sbatch --time=8:00:00 --job-name=foilpolars-mhk \
+  --output=logs/mhk_%j.out --error=logs/mhk_%j.err \
+  submit_to_kestrel.sh mhk
+sbatch --time=1:00:00 --job-name=foilpolars-small \
+  --output=logs/small_%j.out --error=logs/small_%j.err \
+  submit_to_kestrel.sh small
+```
+
+Pass `--time`/`--job-name`/`--output`/`--error` on the `sbatch` command
+line as shown above, not via the script's own `nhours=N` argument —
+`nhours` only takes effect when `submit_to_kestrel.sh` is *run
+directly* (`./submit_to_kestrel.sh mhk nhours=8`) so it can resubmit
+itself through `sbatch`; calling `sbatch submit_to_kestrel.sh` skips
+that resubmit step, so `nhours` is silently ignored and every job gets
+the script's default `#SBATCH --time` instead.
 
 ## License
 

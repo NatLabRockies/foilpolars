@@ -261,6 +261,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pyyaml" },
     { name = "scipy" },
+    { name = "tqdm" },
     { name = "xarray" },
 ]
 
@@ -284,6 +285,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "scipy", specifier = ">=1.11" },
+    { name = "tqdm", specifier = ">=4.66" },
     { name = "xarray", specifier = ">=2024.1" },
 ]
 provides-extras = ["dev"]

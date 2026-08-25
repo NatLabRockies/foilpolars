@@ -13,6 +13,7 @@ from g2aero.Grassmann import (
 )
 from g2aero.utils import check_selfintersect
 from scipy.stats import gaussian_kde
+from tqdm import tqdm
 
 from foilpolars.utils import save_or_show
 
@@ -27,6 +28,7 @@ def compute_grassmann(
     shapes: dict[str, np.ndarray],
 ) -> dict[str, dict[str, np.ndarray]]:
     """Map each foil's raw (x/c, y/c) coordinates onto the Grassmannian."""
+    print("[compute_grassmann] starting")
     results: dict[str, dict[str, np.ndarray]] = {}
 
     # Landmark-affine standardize each foil independently, since raw
@@ -135,6 +137,7 @@ def compute_pga_basis(
     n_coord: int = 4,
 ) -> dict[str, object]:
     """Batch-align all foils, then compute their Karcher mean + PGA basis."""
+    print("[compute_pga_basis] starting")
     # Stack every foil's coordinates so they can be batch-aligned together
     foil_ids = list(shapes.keys())
     stacked = np.stack([shapes[desig] for desig in foil_ids])
@@ -314,7 +317,7 @@ def perturb_grassmann(
     coords = np.empty((n_perturb, mu.shape[0], 2))
     coefs = np.empty((n_perturb, t.shape[1]))
     ratios = np.empty(n_perturb)
-    for j in range(n_perturb):
+    for j in tqdm(range(n_perturb), desc="[perturb_grassmann] sampling"):
         while True:
             sample = rng.uniform(axis_min, axis_max)
             coef, ratio = sample[:-1], sample[-1]
@@ -466,7 +469,7 @@ def _max_thickness(coords: np.ndarray) -> np.ndarray:
 def plot_te_thickness_histogram(
     perturbed: dict[str, np.ndarray],
     save_path: str | None = None,
-    min_thickness: float = 1e-4,
+    min_te_thickness: float = 1e-4,
 ) -> None:
     """Histogram of perturbed TE thickness (y/c), flags shapes below min."""
     # Trailing edge thickness per perturbed sample, in physical
@@ -488,23 +491,63 @@ def plot_te_thickness_histogram(
 
     # Min-thickness line, plus a count/id readout of foils under it
     # (same p#### ids `shapes_dict` assigns this array in the sweep)
-    below = np.nonzero(perturbed_te < min_thickness)[0]
+    below = np.nonzero(perturbed_te < min_te_thickness)[0]
     foil_ids = list(shapes_dict(perturbed["phys"]).keys())
     below_ids = [foil_ids[i] for i in below]
     ax.axvline(
-        min_thickness, color="tab:red", linestyle="--", linewidth=1,
-        label=f"min allowed = {min_thickness:.0e}",
+        min_te_thickness, color="tab:red", linestyle="--", linewidth=1,
+        label=f"min allowed = {min_te_thickness:.0e}",
     )
     ax.text(
         0.01, 0.92,
         f"{len(below)}/{len(perturbed_te)} foils below "
-        f"{min_thickness:.0e}",
+        f"{min_te_thickness:.0e}",
         transform=ax.transAxes, fontsize=8, color="tab:red",
     )
     ax.legend(fontsize=8)
     if below_ids:
         print(
-            f"{len(below_ids)} foils below {min_thickness:.0e} TE "
+            f"{len(below_ids)} foils below {min_te_thickness:.0e} TE "
+            f"thickness: {', '.join(below_ids)}"
+        )
+    save_or_show(fig, save_path, dpi=150, bbox_inches="tight")
+
+
+def plot_max_thickness_histogram(
+    perturbed: dict[str, np.ndarray],
+    save_path: str | None = None,
+    min_thickness: float = 0.05,
+) -> None:
+    """Histogram of perturbed max thickness (t/c), flags shapes below min."""
+    # Max upper/lower surface separation per perturbed sample, in
+    # physical (x/c, y/c) coordinates
+    perturbed_max_t = _max_thickness(perturbed["phys"])
+
+    fig, ax = plt.subplots(figsize=(9, 3.5))
+    ax.hist(perturbed_max_t, bins=30, color="tab:blue", alpha=0.7)
+    ax.set_xlabel("max thickness (t/c)")
+    ax.set_ylabel("count")
+    ax.grid(True, linewidth=0.3)
+
+    # Min-thickness line, plus a count/id readout of foils under it
+    # (same p#### ids `shapes_dict` assigns this array in the sweep)
+    below = np.nonzero(perturbed_max_t < min_thickness)[0]
+    foil_ids = list(shapes_dict(perturbed["phys"]).keys())
+    below_ids = [foil_ids[i] for i in below]
+    ax.axvline(
+        min_thickness, color="tab:red", linestyle="--", linewidth=1,
+        label=f"min allowed = {min_thickness:.2f}",
+    )
+    ax.text(
+        0.01, 0.92,
+        f"{len(below)}/{len(perturbed_max_t)} foils below "
+        f"{min_thickness:.2f}",
+        transform=ax.transAxes, fontsize=8, color="tab:red",
+    )
+    ax.legend(fontsize=8)
+    if below_ids:
+        print(
+            f"{len(below_ids)} foils below {min_thickness:.2f} max "
             f"thickness: {', '.join(below_ids)}"
         )
     save_or_show(fig, save_path, dpi=150, bbox_inches="tight")

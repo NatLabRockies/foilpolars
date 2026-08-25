@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import matplotlib
 import numpy as np
 import pandas as pd
@@ -47,6 +45,7 @@ def compute_cavitation_sigma(
 
 def summarize_convergence(ds: xr.Dataset) -> pd.DataFrame:
     """Summarise XFoil convergence fraction and NeuralFoil mean confidence."""
+    print("[summarize_convergence] starting")
     records = []
 
     for foil_id in ds["foil_id"].values:
@@ -91,39 +90,24 @@ def summarize_convergence(ds: xr.Dataset) -> pd.DataFrame:
     return df
 
 
-def save_per_reynolds(ds: xr.Dataset, out_path: str) -> list[str]:
-    """Split ds along Re into one netcdf per value, under per_reynolds/."""
-    # Derive each slice's file name from the combined output path, e.g.
-    # data/foilpolars.nc -> data/per_reynolds/foilpolars_Re500000.nc
-    data_dir = os.path.dirname(out_path)
-    stem, ext = os.path.splitext(os.path.basename(out_path))
-    slice_dir = os.path.join(data_dir, "per_reynolds")
-    os.makedirs(slice_dir, exist_ok=True)
-
-    paths = []
-    for re in ds["Re"].values:
-        slice_path = os.path.join(slice_dir, f"{stem}_Re{int(re)}{ext}")
-        ds.sel(Re=re).to_netcdf(slice_path)
-        paths.append(slice_path)
-        print(f"Saved {slice_path}")
-    return paths
-
-
-def slice_low_quality_foils(
+def drop_low_quality_foils(
     ds: xr.Dataset,
-    conv_threshold: float = 0.75,
+    min_xfoil_conv: float = 0.75,
     min_te_thickness: float = 1e-4,
+    min_thickness: float = 0.05,
 ) -> xr.Dataset:
-    """Drop foils with low XFoil convergence or a too-thin trailing edge."""
+    """Drop whole foils with low XFoil convergence or an unbuildable shape."""
+    print("[drop_low_quality_foils] starting")
     from foilpolars.grassmann import _te_thickness, reconstruct_phys_shape
 
-    # XFoil convergence fraction per foil, same criterion as plot_summary's
-    # threshold line
+    # XFoil convergence fraction per foil, same criterion as
+    # plot_convergence's threshold line
     xfoil_conv = ds["converged"].sel(fidelity="xfoil")
     conv_frac = xfoil_conv.mean(dim=("alpha", "Re", "n_crit")).values
 
     # Reconstruct each foil's physical shape from its saved PGA params to
-    # get its trailing-edge gap (not stored directly in the dataset)
+    # get its trailing-edge gap (not stored directly in the dataset);
+    # max thickness is already stored as thickness_max
     mu = ds["mu"].values
     vh = ds["Vh"].values
     m_mean = ds["m_mean"].values
@@ -144,19 +128,50 @@ def slice_low_quality_foils(
         )
         for i in range(len(foil_ids))
     ])
+    max_thickness = ds["thickness_max"].values
 
-    # Keep only foils meeting both quality criteria
+    # Keep only foils meeting all three shape/convergence criteria
     keep = (
-        (conv_frac >= conv_threshold)
+        (conv_frac >= min_xfoil_conv)
         & (te_thickness >= min_te_thickness)
+        & (max_thickness >= min_thickness)
     )
     n_dropped = int((~keep).sum())
     print(
         f"Dropping {n_dropped}/{len(foil_ids)} foils "
-        f"(XFoil converged < {conv_threshold:.2f} or "
-        f"TE thickness < {min_te_thickness:.0e})"
+        f"(XFoil converged < {min_xfoil_conv:.2f}, "
+        f"TE thickness < {min_te_thickness:.0e}, or "
+        f"max thickness < {min_thickness:.2f})"
     )
     return ds.sel(foil_id=foil_ids[keep])
+
+
+def mask_untrusted_points(
+    ds: xr.Dataset,
+    min_neuralfoil_confidence: float = 0.75,
+) -> xr.Dataset:
+    """Zero `converged` wherever XFoil/NeuralFoil isn't jointly trusted."""
+    print("[mask_untrusted_points] starting")
+    xfoil_ok = ds["converged"].sel(fidelity="xfoil").values == 1.0
+    nf_conf = ds["analysis_confidence"].sel(fidelity="neuralfoil").values
+    neuralfoil_ok = nf_conf >= min_neuralfoil_confidence
+
+    # Common mask broadcasts back over the fidelity dim: 'converged' is
+    # NaN on the neuralfoil slice as saved by the sweep, so this is the
+    # one flag both fidelities can share to mark a point as usable
+    common = xfoil_ok & neuralfoil_ok
+    n_common = int(common.sum())
+    print(
+        f"{n_common}/{common.size} points trusted by both XFoil "
+        f"(converged) and NeuralFoil (confidence >= "
+        f"{min_neuralfoil_confidence:.2f})"
+    )
+
+    new_converged = np.broadcast_to(
+        common[..., None], ds["converged"].shape,
+    ).astype(ds["converged"].dtype)
+    ds = ds.assign(converged=(ds["converged"].dims, new_converged))
+    return ds
 
 
 def _boxplot_by_foil(
@@ -179,17 +194,19 @@ def _boxplot_by_foil(
         patch.set_alpha(0.6)
 
 
-def plot_summary(
+def plot_convergence(
     ds: xr.Dataset,
-    fname: str = "output/figures/summary.png",
+    fname: str = "output/figures/convergence.png",
     n_worst_foils: int = 1000,
-    conv_threshold: float = 0.75,
+    min_xfoil_conv: float = 0.75,
+    min_neuralfoil_confidence: float = 0.75,
 ) -> None:
     """XFoil convergence and NeuralFoil confidence vs sweep params + foil."""
+    print("[plot_convergence] starting")
     xfoil_conv = ds["converged"].sel(fidelity="xfoil")
     nf_conf = ds["analysis_confidence"].sel(fidelity="neuralfoil")
 
-    fig = plt.figure(figsize=(14, 11))
+    fig = plt.figure(figsize=(11, 8.5))
     gs = fig.add_gridspec(3, 3)
 
     # Top row: XFoil convergence + NeuralFoil confidence overlaid,
@@ -238,12 +255,12 @@ def plot_summary(
 
     # Threshold line, plus a crossing marker (if within the plotted
     # subset) and a count of foils in the full dataset below it
-    n_below = int(np.sum(xfoil_frac_all < conv_threshold))
+    n_below = int(np.sum(xfoil_frac_all < min_xfoil_conv))
     ax_xfoil.axhline(
-        conv_threshold, color="tab:red", linestyle="--", linewidth=1,
-        label=f"{conv_threshold:.2f} threshold",
+        min_xfoil_conv, color="tab:red", linestyle="--", linewidth=1,
+        label=f"{min_xfoil_conv:.2f} threshold",
     )
-    below = np.nonzero(xfoil_frac_foil < conv_threshold)[0]
+    below = np.nonzero(xfoil_frac_foil < min_xfoil_conv)[0]
     if len(below):
         ax_xfoil.axvline(
             x[below[-1]] + 0.5, color="tab:red", linestyle="--",
@@ -252,7 +269,7 @@ def plot_summary(
     ax_xfoil.text(
         0.01, 0.05,
         f"{n_below}/{len(foil_ids_all)} foils below "
-        f"{conv_threshold:.2f}",
+        f"{min_xfoil_conv:.2f}",
         transform=ax_xfoil.transAxes, fontsize=8, color="tab:red",
     )
 
@@ -265,9 +282,13 @@ def plot_summary(
     ax_xfoil.legend(fontsize=8)
 
     # Bottom row: NeuralFoil confidence, one box per foil shape, pooling
-    # alpha/Re/n_crit into each box's sample
+    # alpha/Re/n_crit into each box's sample, with its own threshold line
     ax_nf = fig.add_subplot(gs[2, :])
     _boxplot_by_foil(ax_nf, nf_conf, foil_ids)
+    ax_nf.axhline(
+        min_neuralfoil_confidence, color="tab:red", linestyle="--",
+        linewidth=1, label=f"{min_neuralfoil_confidence:.2f} threshold",
+    )
     ax_nf.set_xticks(x[::stride])
     ax_nf.set_xticklabels(
         foil_ids[::stride], rotation=45, ha="right", fontsize=8,
@@ -279,33 +300,21 @@ def plot_summary(
     )
     ax_nf.set_ylabel("NeuralFoil confidence")
     ax_nf.grid(True, linewidth=0.4, axis="y")
+    ax_nf.legend(fontsize=8)
 
-    fig.suptitle(
-        "XFoil convergence and NeuralFoil confidence summary", fontsize=13,
-    )
     fig.tight_layout()
-    save_or_show(fig, fname, dpi=150)
+    save_or_show(fig, fname, dpi=150, bbox_inches="tight")
 
 
-def plot_worst_foil_shapes(
+def plot_foil_shape(
     ds: xr.Dataset,
-    fname: str = "output/figures/worst_foil_shapes.png",
-    n_worst: int = 20,
+    foil_id: str,
+    figures_dir: str = "output/figures",
 ) -> None:
-    """Plot physical (x/c, y/c) outlines of the worst-converging foils."""
+    """Plot one foil's physical (x/c, y/c) outline, saved in its own dir."""
     from foilpolars.grassmann import reconstruct_phys_shape
 
-    # Rank every foil by XFoil convergence fraction, same ordering as
-    # plot_summary's foil-shape rows, and keep only the worst n_worst
-    xfoil_conv = ds["converged"].sel(fidelity="xfoil")
-    foil_ids_all = ds["foil_id"].values
-    xfoil_frac_all = xfoil_conv.mean(dim=("alpha", "Re", "n_crit")).values
-    n = min(n_worst, len(foil_ids_all))
-    worst = np.argsort(xfoil_frac_all)[:n]
-    foil_ids = foil_ids_all[worst]
-    xfoil_frac = xfoil_frac_all[worst]
-
-    # Shared PGA basis/affine params needed to reconstruct any foil's
+    # Shared PGA basis/affine params needed to reconstruct this foil's
     # physical shape from its stored coefficients
     mu = ds["mu"].values
     vh = ds["Vh"].values
@@ -314,52 +323,39 @@ def plot_worst_foil_shapes(
     n_coord = sum(
         1 for name in ds.data_vars if str(name).startswith("pga_coef_")
     )
+    coef = np.array([
+        ds[f"pga_coef_{j}"].sel(foil_id=foil_id).item()
+        for j in range(n_coord)
+    ])
+    ratio = ds["thickness_ratio"].sel(foil_id=foil_id).item()
+    phys = reconstruct_phys_shape(mu, vh, m_mean, b_mean, coef, ratio)
 
-    # Reconstruct and plot each worst foil's shape on its own subplot
-    ncols = min(n, 5)
-    nrows = -(-n // ncols)
-    fig, axes = plt.subplots(
-        nrows, ncols, figsize=(3 * ncols, 1.8 * nrows), squeeze=False,
-    )
-    for i, foil_id in enumerate(foil_ids):
-        ax = axes[i // ncols, i % ncols]
-        coef = np.array([
-            ds[f"pga_coef_{j}"].sel(foil_id=foil_id).item()
-            for j in range(n_coord)
-        ])
-        ratio = ds["thickness_ratio"].sel(foil_id=foil_id).item()
-        phys = reconstruct_phys_shape(mu, vh, m_mean, b_mean, coef, ratio)
-        ax.plot(phys[:, 0], phys[:, 1], color="black", linewidth=1)
-        ax.set_aspect("equal")
-        ax.set_title(f"{foil_id} ({xfoil_frac[i]:.2f})", fontsize=8)
-        ax.axis("off")
-
-    # Hide any unused trailing subplot axes, e.g. n_worst=10 on a 3x4 grid
-    for i in range(n, nrows * ncols):
-        axes[i // ncols, i % ncols].axis("off")
-
-    fig.suptitle(
-        f"Foil shapes ({n} worst XFoil convergence, ascending)", fontsize=12,
-    )
+    fig, ax = plt.subplots(figsize=(4, 1.6))
+    ax.plot(phys[:, 0], phys[:, 1], color="black", linewidth=1)
+    ax.set_aspect("equal")
+    ax.set_title(foil_id, fontsize=9)
+    ax.axis("off")
     fig.tight_layout()
-    save_or_show(fig, fname, dpi=150)
+
+    out_path = f"{figures_dir}/{foil_id}/{foil_id}_shape.png"
+    save_or_show(fig, out_path, dpi=150, bbox_inches="tight", quiet=True)
 
 
 def plot_pga_pairs_worst(
     ds: xr.Dataset,
     fname: str = "output/figures/pga_pairs_worst.png",
-    conv_threshold: float = 0.75,
+    min_xfoil_conv: float = 0.75,
     min_foils: int = 3,
 ) -> None:
     """Corner plot of PGA coords + thickness ratio, foils below threshold."""
     from foilpolars.grassmann import _draw_pga_corner
 
     # Foils whose XFoil convergence fraction falls below the threshold,
-    # same criterion as plot_summary's threshold line
+    # same criterion as plot_convergence's threshold line
     xfoil_conv = ds["converged"].sel(fidelity="xfoil")
     foil_ids_all = ds["foil_id"].values
     xfoil_frac_all = xfoil_conv.mean(dim=("alpha", "Re", "n_crit")).values
-    foil_ids = foil_ids_all[xfoil_frac_all < conv_threshold]
+    foil_ids = foil_ids_all[xfoil_frac_all < min_xfoil_conv]
     n = len(foil_ids)
 
     # Too few foils for a KDE corner plot (e.g. none when XFoil never
@@ -367,7 +363,7 @@ def plot_pga_pairs_worst(
     if n < min_foils:
         print(
             f"Skipping {fname}: only {n} foils below "
-            f"{conv_threshold:.2f} XFoil convergence (need "
+            f"{min_xfoil_conv:.2f} XFoil convergence (need "
             f">= {min_foils})"
         )
         return
@@ -387,7 +383,7 @@ def plot_pga_pairs_worst(
 
     fig = _draw_pga_corner(
         sampled, labels,
-        title=f"PGA pairs ({n} foils below {conv_threshold:.2f} XFoil "
+        title=f"PGA pairs ({n} foils below {min_xfoil_conv:.2f} XFoil "
         "convergence)",
     )
     save_or_show(fig, fname, dpi=150, bbox_inches="tight")
@@ -504,4 +500,4 @@ def plot_foil_re_comparison(
     out_path = (
         f"{figures_dir}/{foil_id}/{foil_id}_{re_tag}_{fname_tag}.png"
     )
-    save_or_show(fig, out_path, dpi=150)
+    save_or_show(fig, out_path, dpi=150, quiet=True)

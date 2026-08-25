@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import os
 
 import numpy as np
 import xarray as xr
 import yaml
+from tqdm import tqdm
 
 from foilpolars.grassmann import (
     add_pga_columns,
@@ -18,6 +20,7 @@ from foilpolars.grassmann import (
     load_grassmann_cache,
     perturb_grassmann,
     plot_grassmann_baseline_samples,
+    plot_max_thickness_histogram,
     plot_perturbed_shapes,
     plot_pga_pairs,
     plot_te_thickness_histogram,
@@ -27,13 +30,12 @@ from foilpolars.grassmann import (
 )
 from foilpolars.postprocess import (
     compute_cavitation_sigma,
+    drop_low_quality_foils,
+    mask_untrusted_points,
+    plot_convergence,
     plot_foil_re_comparison,
+    plot_foil_shape,
     plot_pga_pairs_worst,
-    plot_summary,
-    plot_worst_foil_shapes,
-    save_per_reynolds,
-    slice_low_quality_foils,
-    summarize_convergence,
 )
 from foilpolars.shapes import (
     load_all_shapes,
@@ -42,14 +44,20 @@ from foilpolars.shapes import (
     save_shapes,
 )
 from foilpolars.sweep import run_full_sweep
-from foilpolars.utils import print_airfoil_database
 
 DEFAULT_N_WORST_FOILS = 5
 
 
-def figures_dir_for(config: dict) -> str:
+def out_path_for(config_path: str) -> str:
+    """Sweep netcdf path derived from the config filename's tag suffix."""
+    stem = os.path.splitext(os.path.basename(config_path))[0]
+    tag = stem.removeprefix("config")
+    return f"output/data{tag}/foilpolars.nc"
+
+
+def figures_dir_for(out_path: str) -> str:
     """Figures dir mirroring the data dir, e.g. data_small -> figures_small."""
-    data_dir = os.path.dirname(config["output"]["path"])
+    data_dir = os.path.dirname(out_path)
     return data_dir.replace("data", "figures", 1)
 
 
@@ -60,6 +68,7 @@ def save_baseline_shapes(
     plot: bool = True,
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
     """Load, repanel and save the raw + repaneled baseline foils."""
+    print("[save_baseline_shapes] loading raw baseline foils")
     raw_shapes = load_raw_shapes(config)
     save_shapes(raw_shapes, out_path=f"{data_dir}/foil_baseline.nc")
 
@@ -74,13 +83,15 @@ def save_baseline_shapes(
     return raw_shapes, repaneled_shapes
 
 
-def get_foils(config_path: str) -> None:
+def baseline(config_path: str) -> None:
     """Load, repanel, save and plot the foils listed in the config."""
+    print("[baseline] starting")
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    data_dir = os.path.dirname(config["output"]["path"])
-    figures_dir = figures_dir_for(config)
+    out_path = out_path_for(config_path)
+    data_dir = os.path.dirname(out_path)
+    figures_dir = figures_dir_for(out_path)
     save_baseline_shapes(config, data_dir, figures_dir)
 
 
@@ -100,6 +111,7 @@ def build_grassmann_artifacts(
     figures_dir: str,
 ) -> dict[str, object]:
     """Rebuild the baseline/Grassmann/perturbed shape artifacts and cache."""
+    print("[build_grassmann_artifacts] starting")
     # Delete-then-regenerate: the config's fixed seed always reproduces
     # the same files, so no stale file lingers and reruns match exactly
     for name in GRASSMANN_OWNED_FILES:
@@ -113,6 +125,7 @@ def build_grassmann_artifacts(
     )
 
     # Grassmann embedding of the raw baseline shapes
+    print("[build_grassmann_artifacts] computing Grassmann embedding")
     grassmann_results = compute_grassmann(raw_shapes)
     check_reconstruction(raw_shapes, grassmann_results)
     save_grassmann_baseline(
@@ -121,8 +134,10 @@ def build_grassmann_artifacts(
 
     # PGA needs equal landmark counts, so use repaneled shapes with
     # r=4 modes, matching Doronina et al. 2022's eigenvalue-decay cutoff
+    print("[build_grassmann_artifacts] computing PGA basis")
     basis = compute_pga_basis(repaneled_shapes, n_coord=4)
     grassmann_config = config.get("grassmann", {})
+    print("[build_grassmann_artifacts] sampling perturbed shapes")
     perturbed = perturb_grassmann(
         basis,
         n_perturb=grassmann_config.get("n_perturb", 20),
@@ -153,11 +168,13 @@ def build_grassmann_artifacts(
 
 def grassmann(config_path: str) -> None:
     """Rebuild the baseline/Grassmann/perturbed shape artifacts."""
+    print("[grassmann] starting")
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    data_dir = os.path.dirname(config["output"]["path"])
-    figures_dir = figures_dir_for(config)
+    out_path = out_path_for(config_path)
+    data_dir = os.path.dirname(out_path)
+    figures_dir = figures_dir_for(out_path)
     build_grassmann_artifacts(config, data_dir, figures_dir)
     print("Run `foilpolars plot` to (re)generate figures from this data.")
 
@@ -168,7 +185,8 @@ def plot_comparison_figures(
     figures_dir: str,
     n_foils: int = DEFAULT_N_WORST_FOILS,
 ) -> None:
-    """Comparison figure per (foil, Re, n_crit) for the n_foils worst foils."""
+    """Shape + per-(Re, n_crit) comparison figures for the n_foils worst."""
+    print("[plot_comparison_figures] starting")
     foil_ids_all = ds["foil_id"].values
     xfoil_frac = ds["converged"].sel(fidelity="xfoil").mean(
         dim=("alpha", "Re", "n_crit")
@@ -183,26 +201,39 @@ def plot_comparison_figures(
             f"{n_foils} worst-converging"
         )
 
-    op = config["operating"]
+    # One shape outline per worst-converging foil, in its own directory
+    for foil_id in foil_ids:
+        plot_foil_shape(ds, foil_id, figures_dir=figures_dir)
+
+    # Re/n_crit come from the dataset itself, not the live config's
+    # `sweep` block — those are fixed at sweep time and must never
+    # drift from what's actually in the saved data
     cav = config["cavitation"]
-    re_values = [float(r) for r in op["reynolds"]]
+    re_values = [float(r) for r in ds["Re"].values]
     chord = float(cav["chord"])
     depth = float(cav["depth"])
     temperature = float(cav["temperature"])
     sigma_by_re = compute_cavitation_sigma(
         re_values, chord, depth, temperature,
     )
-    for foil_id in foil_ids:
-        for re in re_values:
-            for n_crit in ds["n_crit"].values:
-                plot_foil_re_comparison(
-                    ds, foil_id, re, sigma_by_re[re],
-                    n_crit=float(n_crit), figures_dir=figures_dir,
-                )
+    combos = list(itertools.product(foil_ids, re_values, ds["n_crit"].values))
+    for foil_id, re, n_crit in tqdm(
+        combos, desc="[plot_comparison_figures] figures",
+    ):
+        plot_foil_re_comparison(
+            ds, foil_id, re, sigma_by_re[re],
+            n_crit=float(n_crit), figures_dir=figures_dir,
+        )
 
 
-def plot_grassmann_figures(data_dir: str, figures_dir: str) -> None:
+def plot_grassmann_figures(
+    data_dir: str,
+    figures_dir: str,
+    min_te_thickness: float = 1e-4,
+    min_thickness: float = 0.05,
+) -> None:
     """Redraw every Grassmann figure from the cached shapes/basis/samples."""
+    print("[plot_grassmann_figures] starting")
     repaneled_shapes, basis, perturbed = load_grassmann_cache(
         grassmann_cache_path(data_dir),
     )
@@ -222,117 +253,120 @@ def plot_grassmann_figures(data_dir: str, figures_dir: str) -> None:
     )
     plot_te_thickness_histogram(
         perturbed, save_path=f"{figures_dir}/te_thickness.png",
+        min_te_thickness=min_te_thickness,
+    )
+    plot_max_thickness_histogram(
+        perturbed, save_path=f"{figures_dir}/max_thickness.png",
+        min_thickness=min_thickness,
     )
 
 
-def plot(config_path: str) -> None:
-    """Regenerate every figure except the per-foil comparison plots."""
+def plot(
+    config_path: str,
+    n_foils: int | None = None,
+) -> None:
+    """Regenerate every figure from whatever saved data/cache exists."""
+    print("[plot] starting")
+    out_path = out_path_for(config_path)
+    data_dir = os.path.dirname(out_path)
+    figures_dir = figures_dir_for(out_path)
+
+    # Only `cavitation`/`postprocess` config values are used below —
+    # `sweep` params (Re, n_crit, ...) always come from the dataset
+    # itself, since they're fixed once the sweep has run
     with open(config_path) as f:
         config = yaml.safe_load(f)
-
-    out_path = config["output"]["path"]
-    data_dir = os.path.dirname(out_path)
-    figures_dir = figures_dir_for(config)
+    pp = config.get("postprocess", {})
+    if n_foils is None:
+        n_foils = pp.get("n_worst_foils_for_plot", DEFAULT_N_WORST_FOILS)
+    min_xfoil_conv = float(pp.get("min_xfoil_conv", 0.75))
+    min_nf_conf = float(pp.get("min_neuralfoil_confidence", 0.75))
+    min_te_thickness = float(pp.get("min_te_thickness", 1e-4))
+    min_thickness = float(pp.get("min_thickness", 0.05))
 
     # Grassmann figures need `grassmann`'s cache; sweep figures need
-    # `run`'s dataset. Per-foil comparisons are left to `plot-worst-foil`
+    # `sweep`'s saved dataset, reloaded here even when `sweep` calls
+    # this directly, so every figure reflects what actually landed on
+    # disk
     cache_path = grassmann_cache_path(data_dir)
     if os.path.exists(cache_path):
-        plot_grassmann_figures(data_dir, figures_dir)
+        plot_grassmann_figures(
+            data_dir, figures_dir, min_te_thickness, min_thickness,
+        )
 
     if os.path.exists(out_path):
         ds = xr.open_dataset(out_path)
-        plot_summary(ds, fname=f"{figures_dir}/summary.png")
-        plot_worst_foil_shapes(
-            ds, fname=f"{figures_dir}/worst_foil_shapes.png",
+        plot_convergence(
+            ds, fname=f"{figures_dir}/convergence.png",
+            min_xfoil_conv=min_xfoil_conv,
+            min_neuralfoil_confidence=min_nf_conf,
         )
         plot_pga_pairs_worst(
             ds, fname=f"{figures_dir}/pga_pairs_worst.png",
+            min_xfoil_conv=min_xfoil_conv,
         )
+        plot_comparison_figures(ds, config, figures_dir, n_foils)
 
 
-def plot_worst_foil(config_path: str, n_foils: int) -> None:
-    """Reload a saved sweep dataset and plot its n_foils worst comparisons."""
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
-
-    out_path = config["output"]["path"]
-    figures_dir = figures_dir_for(config)
-    ds = xr.open_dataset(out_path)
-    plot_comparison_figures(ds, config, figures_dir, n_foils)
-
-
-def slice_reynolds(config_path: str) -> None:
-    """Reload a saved sweep dataset and split it into one netcdf per Re."""
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
-
-    out_path = config["output"]["path"]
-    ds = xr.open_dataset(out_path)
-    save_per_reynolds(ds, out_path)
-
-
-def slice_foils(
-    config_path: str,
-    conv_threshold: float,
-    min_te_thickness: float,
-) -> None:
-    """Reload a saved sweep dataset and drop its low-quality foils."""
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
-
-    out_path = config["output"]["path"]
-    stem, ext = os.path.splitext(out_path)
-    sliced_path = f"{stem}_sliced{ext}"
-
-    ds = xr.open_dataset(out_path)
-    sliced = slice_low_quality_foils(ds, conv_threshold, min_te_thickness)
-    sliced.to_netcdf(sliced_path)
-    print(f"Saved {sliced_path}")
-
-
-def run(config_path: str) -> None:
+def sweep(config_path: str) -> None:
     """Rebuild shape artifacts, then sweep XFoil + NeuralFoil over them."""
+    print("[sweep] starting")
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    out_path = config["output"]["path"]
+    out_path = out_path_for(config_path)
     data_dir = os.path.dirname(out_path)
-    figures_dir = figures_dir_for(config)
+    figures_dir = figures_dir_for(out_path)
     os.makedirs(data_dir, exist_ok=True)
 
     # Same pipeline as `grassmann` — the sweep runs over its perturbed
     # shapes, not the baseline foils directly
+    print("[sweep] building Grassmann/perturbed-shape artifacts")
     artifacts = build_grassmann_artifacts(config, data_dir, figures_dir)
     shapes = artifacts["foil_perturbed"]
-    plot_grassmann_figures(data_dir, figures_dir)
 
     # Both solvers over every (shape, alpha, Re) combination, checkpointed
     # to out_path after each foil so a killed job keeps completed ones
+    print("[sweep] running the XFoil + NeuralFoil sweep")
     ds = run_full_sweep(config, shapes, checkpoint_path=out_path)
 
-    # Print convergence/confidence summary, then attach each shape's 5
-    # PGA params (the netcdf below already carries per-row values)
-    print(summarize_convergence(ds))
-    plot_summary(ds, fname=f"{figures_dir}/summary.png")
+    # Attach each shape's 5 PGA params, then the shared Karcher
+    # mean/PGA basis/affine transform needed to reconstruct any shape
     ds = add_pga_columns(ds, artifacts["perturbed"])
-
-    # Attach the shared Karcher mean/PGA basis/affine transform needed
-    # to reconstruct each shape, then persist polars + those params
     ds = add_shared_basis_params(ds, artifacts["basis"])
     ds.to_netcdf(out_path)
     print(f"Saved {out_path}")
 
-    plot_worst_foil_shapes(
-        ds, fname=f"{figures_dir}/worst_foil_shapes.png",
-    )
-    plot_pga_pairs_worst(
-        ds, fname=f"{figures_dir}/pga_pairs_worst.png",
-    )
+    # Every figure is redrawn from what was just saved to disk, same as
+    # a standalone `plot` call, capped at postprocess.n_worst_foils or
+    # the comparison figures would number in the tens of thousands
+    plot(config_path)
 
-    # One figure per (foil, Re, n_crit) at fixed chord/depth/temperature;
-    # capped at DEFAULT_N_WORST_FOILS or it'd number in the tens of thousands
-    plot_comparison_figures(ds, config, figures_dir, DEFAULT_N_WORST_FOILS)
+
+def save(config_path: str) -> None:
+    """Drop low-quality foils, then mask points untrusted by either solver."""
+    print("[save] starting")
+    with open(config_path) as f:
+        pp = yaml.safe_load(f).get("postprocess", {})
+    min_xfoil_conv = float(pp.get("min_xfoil_conv", 0.75))
+    min_te_thickness = float(pp.get("min_te_thickness", 1e-4))
+    min_thickness = float(pp.get("min_thickness", 0.05))
+    min_nf_conf = float(pp.get("min_neuralfoil_confidence", 0.75))
+
+    out_path = out_path_for(config_path)
+    ds = xr.open_dataset(out_path)
+
+    # Foil-level first: drops whole foils before the (larger) point-level
+    # mask runs over them, so no wasted work on foils about to be dropped
+    ds = drop_low_quality_foils(
+        ds, min_xfoil_conv, min_te_thickness, min_thickness,
+    )
+    ds = mask_untrusted_points(ds, min_nf_conf)
+
+    stem, ext = os.path.splitext(out_path)
+    clean_path = f"{stem}_clean{ext}"
+    ds.to_netcdf(clean_path)
+    print(f"Saved {clean_path}")
 
 
 def main() -> None:
@@ -340,21 +374,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="foilpolars")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run_parser = subparsers.add_parser(
-        "run", help="Run the XFoil + NeuralFoil sweep and plot figures"
+    sweep_parser = subparsers.add_parser(
+        "sweep", help="Run the XFoil + NeuralFoil sweep and plot figures"
     )
-    run_parser.add_argument("--config", default="configs/sweep_config.yaml")
-
-    subparsers.add_parser(
-        "list-foils", help="List the AeroSandbox airfoil database"
+    sweep_parser.add_argument(
+        "-c", "--config", default="configs/config.yaml"
     )
 
-    get_foils_parser = subparsers.add_parser(
-        "get-foils",
+    baseline_parser = subparsers.add_parser(
+        "baseline",
         help="Load, repanel, save and plot the configured foils",
     )
-    get_foils_parser.add_argument(
-        "--config", default="configs/sweep_config.yaml"
+    baseline_parser.add_argument(
+        "-c", "--config", default="configs/config.yaml"
     )
 
     grassmann_parser = subparsers.add_parser(
@@ -362,67 +394,40 @@ def main() -> None:
         help="Convert raw foil shapes to a Grassmann parameterization",
     )
     grassmann_parser.add_argument(
-        "--config", default="configs/sweep_config.yaml"
+        "-c", "--config", default="configs/config.yaml"
     )
 
     plot_parser = subparsers.add_parser(
         "plot",
-        help="Regenerate all figures except per-foil comparison plots",
+        help="Regenerate every figure from whatever saved data exists",
     )
-    plot_parser.add_argument("--config", default="configs/sweep_config.yaml")
-
-    plot_worst_parser = subparsers.add_parser(
-        "plot-worst-foil",
-        help="Plot per-(foil, Re, n_crit) comparisons for the N worst foils",
+    plot_parser.add_argument(
+        "-c", "--config", default="configs/config.yaml"
     )
-    plot_worst_parser.add_argument(
-        "--config", default="configs/sweep_config.yaml"
-    )
-    plot_worst_parser.add_argument(
-        "-n", "--n-foils", type=int, default=DEFAULT_N_WORST_FOILS,
+    plot_parser.add_argument(
+        "-n", "--n-foils", type=int, default=None,
+        help="default: postprocess.n_worst_foils from the config",
     )
 
-    slice_re_parser = subparsers.add_parser(
-        "slice-reynolds",
-        help="Split the saved sweep dataset into one netcdf per Re",
+    save_parser = subparsers.add_parser(
+        "save",
+        help="Drop low-quality foils/points, save a cleaned dataset",
     )
-    slice_re_parser.add_argument(
-        "--config", default="configs/sweep_config.yaml"
-    )
-
-    slice_foils_parser = subparsers.add_parser(
-        "slice-foils",
-        help="Drop foils with low XFoil convergence or a thin TE gap",
-    )
-    slice_foils_parser.add_argument(
-        "--config", default="configs/sweep_config.yaml"
-    )
-    slice_foils_parser.add_argument(
-        "--conv-threshold", type=float, default=0.75,
-    )
-    slice_foils_parser.add_argument(
-        "--min-te-thickness", type=float, default=1e-4,
+    save_parser.add_argument(
+        "-c", "--config", default="configs/config.yaml"
     )
 
     args = parser.parse_args()
-    if args.command == "run":
-        run(args.config)
-    elif args.command == "list-foils":
-        print_airfoil_database()
-    elif args.command == "get-foils":
-        get_foils(args.config)
+    if args.command == "sweep":
+        sweep(args.config)
+    elif args.command == "baseline":
+        baseline(args.config)
     elif args.command == "grassmann":
         grassmann(args.config)
     elif args.command == "plot":
-        plot(args.config)
-    elif args.command == "plot-worst-foil":
-        plot_worst_foil(args.config, args.n_foils)
-    elif args.command == "slice-reynolds":
-        slice_reynolds(args.config)
-    elif args.command == "slice-foils":
-        slice_foils(
-            args.config, args.conv_threshold, args.min_te_thickness,
-        )
+        plot(args.config, args.n_foils)
+    elif args.command == "save":
+        save(args.config)
 
 
 if __name__ == "__main__":

@@ -5,11 +5,15 @@ build-backend = "hatchling.build"
 [project]
 name = "foilpolars"
 version = "0.1.0"
-description = "Multifidelity aerodynamic polar data for NACA hydrofoil profiles"
+description = "Grassmannian foil shape sweeps for polar generation"
 readme = "README.md"
 license = "BSD-3-Clause"
 authors = [
-    { name = "Rimple Sandhu", email = "sandhu.rimple87@gmail.com" },
+    { name = "Rimple Sandhu", email = "rimple.sandhu@nlr.gov" },
+    { name = "Andrew Glaws" },
+    { name = "Malik Hassanaly" },
+    { name = "Bumseok Lee" },
+    { name = "Ryan King" },
 ]
 requires-python = ">=3.13"
 dependencies = [
@@ -24,13 +28,14 @@ dependencies = [
     "scipy>=1.11",
     "aerosandbox>=4.2.4",
     "g2aero",
+    "tqdm>=4.66",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4", "pytest-cov"]
 
 [project.urls]
-Repository = "https://github.com/rimplesandhu/foilpolars"
+Repository = "https://github.com/NatLabRockies/foilpolars"
 
 [project.scripts]
 foilpolars = "foilpolars.cli:main"

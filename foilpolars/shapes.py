@@ -33,29 +33,27 @@ def _load_airfoil(desig: str) -> asb.Airfoil:
     import aerosandbox as asb
 
     # Some designations aren't in (or are known wrong in) AeroSandbox's
-    # UIUC-backed database; a local coordinate file overrides/supplies it
+    # UIUC-backed database; a local coordinate file overrides/supplies it.
+    # Let AeroSandbox parse the file so Selig-format title lines are
+    # skipped rather than choking a raw np.loadtxt.
     for local_dir in _LOCAL_DIRS:
         local_path = os.path.join(local_dir, f"{desig}.dat")
         if os.path.exists(local_path):
-            coordinates = np.loadtxt(local_path)
-            return asb.Airfoil(name=desig, coordinates=coordinates)
+            return asb.Airfoil(name=desig, coordinates=local_path)
 
     return asb.Airfoil(desig)
 
 
 def load_all_shapes(config: dict) -> dict[str, np.ndarray]:
-    """Load all airfoil coordinates, repanelling per the config's settings."""
-    repanel_cfg = config.get("repanel", {})
-    enabled = repanel_cfg.get("enabled", True)
-    n_points_per_side = repanel_cfg.get("n_points_per_side", 100)
+    """Load all airfoil coordinates, repanelled to the config's point count."""
+    n_points_per_side = config["grassmann"]["n_repanel_points_per_side"]
 
     shapes: dict[str, np.ndarray] = {}
 
-    # Load coordinates for every airfoil designation
-    for desig in config["shapes"]:
+    # Load and repanel coordinates for every airfoil designation
+    for desig in config["baseline"]:
         af = _load_airfoil(desig)
-        if enabled:
-            af = af.repanel(n_points_per_side=n_points_per_side)
+        af = af.repanel(n_points_per_side=n_points_per_side)
         shapes[desig] = af.coordinates
 
     return shapes
@@ -66,7 +64,7 @@ def load_raw_shapes(config: dict) -> dict[str, np.ndarray]:
     shapes: dict[str, np.ndarray] = {}
 
     # Load each airfoil's coordinates straight from its source table
-    for desig in config["shapes"]:
+    for desig in config["baseline"]:
         af = _load_airfoil(desig)
         shapes[desig] = af.coordinates
 
