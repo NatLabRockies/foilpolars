@@ -131,34 +131,6 @@ optional tag (no tag = `configs/config.yaml`):
 ./run.sh mhk      # configs/config_mhk.yaml
 ```
 
-### Submitting to Kestrel
-
-`submit_to_kestrel.sh` is a Slurm batch script that calls `run.sh`
-inside the `ai4wind` allocation. Submit it with `sbatch`, passing the
-same tag `run.sh` takes and a `--time` sized to that config (`sweep`'s
-cost scales with `grassmann.n_perturb`, noted in each config's
-trailing comment):
-
-```bash
-sbatch --time=36:00:00 --job-name=foilpolars-full \
-  --output=logs/full_%j.out --error=logs/full_%j.err \
-  submit_to_kestrel.sh
-sbatch --time=8:00:00 --job-name=foilpolars-mhk \
-  --output=logs/mhk_%j.out --error=logs/mhk_%j.err \
-  submit_to_kestrel.sh mhk
-sbatch --time=1:00:00 --job-name=foilpolars-small \
-  --output=logs/small_%j.out --error=logs/small_%j.err \
-  submit_to_kestrel.sh small
-```
-
-Pass `--time`/`--job-name`/`--output`/`--error` on the `sbatch` command
-line as shown above, not via the script's own `nhours=N` argument —
-`nhours` only takes effect when `submit_to_kestrel.sh` is *run
-directly* (`./submit_to_kestrel.sh mhk nhours=8`) so it can resubmit
-itself through `sbatch`; calling `sbatch submit_to_kestrel.sh` skips
-that resubmit step, so `nhours` is silently ignored and every job gets
-the script's default `#SBATCH --time` instead.
-
 ## License
 
 BSD-3-Clause, see [LICENSE](LICENSE).
